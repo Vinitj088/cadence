@@ -25,56 +25,104 @@ enum ScreenSnapper {
     /// Words a speaker inserts while reading a path or identifier aloud.
     private static let spokenSeparators: Set<String> = ["slash", "forward", "backslash", "dot", "dash", "underscore", "the", "in", "inside", "into", "folder", "directory", "file"]
 
-    static func snap(_ text: String, paths: [String], identifiers: [String]) -> String {
+    private struct Target {
+        let written: String
+        let parts: [String]
+        let isPath: Bool
+        var key: String { parts.joined() }
+    }
+
+    /// - paths: file paths on screen; identifiers: names on screen, in the project and vocabulary;
+    /// - files: project files (repo-relative) for "at <file>" mentions, when `mentions` is on.
+    static func snap(_ text: String, paths: [String], identifiers: [String], files: [String] = [], mentions: Bool = false) -> String {
+        var targets: [Target] = paths.map { Target(written: $0, parts: pathParts($0), isPath: true) }
+        var seen = Set<String>()
+        for identifier in identifiers where isCompoundIdentifier(identifier) {
+            let written = base(identifier)
+            if seen.insert(written).inserted { targets.append(Target(written: written, parts: identifierParts(identifier), isPath: false)) }
+        }
+        // File names, extension included: "screen context swift" → "ScreenContext.swift".
+        for file in files {
+            let name = (file as NSString).lastPathComponent
+            let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+            guard isCompoundIdentifier(stem), !ext.isEmpty, seen.insert(name).inserted else { continue }
+            targets.append(Target(written: name, parts: identifierParts(stem) + [squash(ext)], isPath: false))
+        }
+        // Bucket by the first two letters so each spoken word is only tried against plausible targets.
+        var buckets: [String: [Target]] = [:]
+        for target in targets where target.key.count >= (target.isPath ? 10 : 8) {
+            buckets[String(target.parts[0].prefix(2)), default: []].append(target)
+        }
+        var fileTargets: [String: [Target]] = [:]
+        if mentions {
+            for file in files {
+                let name = (file as NSString).lastPathComponent
+                let parts = camelWords(Substring((name as NSString).deletingPathExtension))
+                    .flatMap { $0.split(whereSeparator: { "-_.".contains($0) }).map(String.init) }
+                    .map(squash).filter { !$0.isEmpty }
+                guard !parts.isEmpty, parts.joined().count >= 4 else { continue }
+                fileTargets[String(parts[0].prefix(2)), default: []].append(Target(written: "@" + file, parts: parts, isPath: false))
+            }
+        }
+
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        // Longest targets first, so a full path wins over its own fragments.
-        let targets: [(written: String, parts: [String], isPath: Bool)] =
-            paths.map { ($0, pathParts($0), true) } +
-            identifiers.filter(isCompoundIdentifier).map { (base($0), identifierParts($0), false) }
-        for target in targets.sorted(by: { $0.parts.joined().count > $1.parts.joined().count }) {
-            words = snapOne(words, target: target)
+        var i = 0
+        while i < words.count {
+            let word = squash(words[i])
+            // "at dictation controller" → "@Sources/…/DictationController.swift"
+            if mentions, word == "at", i + 1 < words.count,
+               let candidates = fileTargets[String(squash(words[i + 1]).prefix(2))],
+               let match = bestMatch(words, from: i + 1, among: candidates, minimum: 4) {
+                let trailing = String(words[match.end].reversed().prefix { ".,;:!?".contains($0) }.reversed())
+                words.replaceSubrange(i...match.end, with: [match.target.written + trailing])
+                i += 1
+                continue
+            }
+            if word.count >= 2, let candidates = buckets[String(word.prefix(2))],
+               let match = bestMatch(words, from: i, among: candidates, minimum: 8) {
+                let written = match.target.isPath ? prefixPath(match.target.written, components: match.partCount) : match.target.written
+                let trailing = String(words[match.end].reversed().prefix { ".,;:!?".contains($0) }.reversed())
+                words.replaceSubrange(i...match.end, with: [written + trailing])
+            }
+            i += 1
         }
         return words.joined(separator: " ")
     }
 
-    private static func snapOne(_ words: [String], target: (written: String, parts: [String], isPath: Bool)) -> [String] {
-        let fullKey = target.parts.joined()
-        guard fullKey.count >= (target.isPath ? 10 : 8) else { return words }
-        var i = 0
-        var out = words
-        while i < out.count {
-            // A spoken path or name starts with (something like) its first part.
-            let first = squash(out[i])
-            guard !first.isEmpty, startsLike(first, target.parts[0]) else { i += 1; continue }
-            var best: (end: Int, partCount: Int, score: Double)?
+    /// The target whose spoken form best covers words[start…], preferring longer matches.
+    private static func bestMatch(_ words: [String], from start: Int, among candidates: [Target], minimum: Int)
+        -> (target: Target, end: Int, partCount: Int)? {
+        let first = squash(words[start])
+        guard !first.isEmpty else { return nil }
+        var best: (target: Target, end: Int, partCount: Int, score: Double, length: Int)?
+        // Small function words are never part of a name unless the name itself contains them.
+        let glue: Set<String> = ["and", "the", "of", "to", "in", "for", "with", "a", "an", "or", "is", "it", "on", "at", "but", "so", "that", "this"]
+        for target in candidates where startsLike(first, target.parts[0]) {
             var spoken = ""
-            var j = i
-            while j < min(out.count, i + 16) {
-                let key = squash(out[j])
-                if !(spokenSeparators.contains(key) && j > i) { spoken += key }
-                // Compare against every prefix of the target's parts: people often say only the start of a path.
-                for count in stride(from: target.parts.count, through: target.isPath ? 3 : target.parts.count, by: -1) {
-                    let prefix = target.parts.prefix(count).joined()
-                    guard prefix.count >= (target.isPath ? 10 : 8), abs(prefix.count - spoken.count) <= max(3, prefix.count / 4) else { continue }
-                    let score = max(WordDiff.similarity(spoken, prefix), WordDiff.similarity(WordDiff.phoneticKey(spoken), WordDiff.phoneticKey(prefix)))
-                    // …and ends on (something like) the last part it covers.
-                    let lastWord = squash(out[j])
-                    guard spokenSeparators.contains(lastWord) == false, endsLike(lastWord, target.parts[count - 1]) else { continue }
-                    if score >= 0.8, best == nil || count > best!.partCount || (count == best!.partCount && score > best!.score) {
-                        best = (j, count, score)
+            let maxWords = target.isPath ? 16 : target.parts.count + 3
+            var j = start
+            while j < min(words.count, start + maxWords) {
+                let key = squash(words[j])
+                if glue.contains(key), !target.parts.contains(key) { break }
+                if !(spokenSeparators.contains(key) && j > start) { spoken += key }
+                if !spokenSeparators.contains(key) {
+                    for count in stride(from: target.parts.count, through: target.isPath ? min(3, target.parts.count) : target.parts.count, by: -1) {
+                        let prefix = target.parts.prefix(count).joined()
+                        guard prefix.count >= minimum, abs(prefix.count - spoken.count) <= max(3, prefix.count / 4),
+                              endsLike(key, target.parts[count - 1]) else { continue }
+                        let raw = max(WordDiff.similarity(spoken, prefix), WordDiff.similarity(WordDiff.phoneticKey(spoken), WordDiff.phoneticKey(prefix)))
+                        guard raw >= 0.8 else { continue }
+                        // Best match first; between near-ties prefer types (Capitalised) and longer names.
+                        let score = raw + (target.written.first?.isUppercase == true ? 0.015 : 0) + Double(prefix.count) * 0.001
+                        if best == nil || score > best!.score {
+                            best = (target, j, count, score, prefix.count)
+                        }
                     }
                 }
                 j += 1
             }
-            if let best, spoken.count > 0 {
-                let written = target.isPath ? prefixPath(target.written, components: best.partCount) : target.written
-                // Keep punctuation that followed the spoken phrase.
-                let trailing = String(out[best.end].reversed().prefix { ".,;:!?".contains($0) }.reversed())
-                out.replaceSubrange(i...best.end, with: [written + trailing])
-            }
-            i += 1
         }
-        return out
+        return best.map { ($0.target, $0.end, $0.partCount) }
     }
 
     private static func startsLike(_ word: String, _ part: String) -> Bool {

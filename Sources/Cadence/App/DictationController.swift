@@ -41,6 +41,8 @@ final class DictationController {
     private var screenTermsResult: [String]?
     /// File paths visible on screen when this take started.
     private var screenPaths: [String] = []
+    /// The codebase behind the focused terminal or editor, when there is one.
+    private var project: ProjectSnapshot?
     private var session = 0
 
     init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore, profile: ProfileStore, voiceFit: VoiceFit) {
@@ -148,6 +150,15 @@ final class DictationController {
         screenTerms = nil
         screenTermsResult = nil
         screenPaths = []
+        project = nil
+        if [.terminal, .code].contains(focus.category), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            let take = session
+            Task {
+                guard let root = await Task.detached(priority: .userInitiated, operation: { ProjectIndex.root(pid: pid) }).value,
+                      let snapshot = await ProjectIndex.shared.snapshot(for: root), self.session == take else { return }
+                self.project = snapshot
+            }
+        }
         if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let ownVocabulary = Set(vocabulary.map { $0.lowercased() })
             let take = session
@@ -303,11 +314,14 @@ final class DictationController {
             (id, engine) = try await resolveEngine()
         }
 
-        // This take's vocabulary: the user's words, what Cadence learned, and names on screen right now.
+        // This take's vocabulary: the user's words, what Cadence learned, names on screen right now,
+        // and the files most recently worked on in this project.
         let onScreen = await screenTermsForTake()
+        let projectHints = (project?.recentFiles ?? []).map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension }
+            .filter(ProjectIndex.isCompound).prefix(25)
         let context = TranscriptionContext(
             language: "en",
-            vocabulary: vocabulary + onScreen,
+            vocabulary: vocabulary + onScreen + projectHints,
             // In a terminal the user's own recent prompts are the useful context, not the screen.
             precedingText: prefs.contextAware ? (focus?.isTerminal == true ? focus?.recentTerminalInput.map { String($0.suffix(300)) } : focus?.textBeforeCaret) : nil,
             profile: prefs.autoLearn ? profile.promptContext : nil
@@ -341,10 +355,21 @@ final class DictationController {
         var postProcessor = processor
         postProcessor.sessionVocabulary = onScreen
         text = postProcessor.process(text)
-        // Spoken file paths and names that are on screen right now, written exactly as shown.
-        if !onScreen.isEmpty || !screenPaths.isEmpty {
-            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary)
+        let devContext = focus.map { [.terminal, .code, .aiChat].contains($0.category) } ?? false
+        // "Use Postgres, no wait, SQLite" → "Use SQLite": agents take prompts literally.
+        if prefs.removeFillers { text = SelfCorrection.apply(text) }
+        // "cloud code" → "Claude Code", "j gpt" → "ChatGPT", "type script" → "TypeScript"…
+        if prefs.smartFormatting { text = DevGlossary.apply(text, devContext: devContext) }
+        // Names and paths on screen or in the project, written exactly; "at <file>" → "@path".
+        let mentions = (focus?.isClaudeCodeInput ?? false) || focus?.category == .code || focus?.category == .aiChat
+        let projectSymbols = devContext ? (project?.symbols ?? []) : []
+        let projectFiles = devContext ? (project?.files ?? []) : []
+        if !onScreen.isEmpty || !screenPaths.isEmpty || !projectSymbols.isEmpty {
+            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary + projectSymbols,
+                                      files: projectFiles, mentions: mentions && project != nil)
         }
+        // "slash compact" → "/compact" in Claude Code.
+        if focus?.isClaudeCodeInput == true { text = SlashCommands.apply(text) }
 
         if prefs.aiPolish, focus != nil {
             overlay.show(.polishing)
