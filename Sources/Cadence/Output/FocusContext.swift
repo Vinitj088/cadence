@@ -66,10 +66,12 @@ struct FocusContext {
             let buffer: String? = focused.attribute(kAXValueAttribute)
             context.recentTerminalInput = buffer.map(Self.promptLines)
             if let tail = buffer?.suffix(1_500) {
-                // Claude Code draws its prompt as a box whose input line starts with "│ >".
-                context.isClaudeCodeInput = tail.contains("│ >") || tail.contains("│ ❯") || tail.contains("? for shortcuts")
+                // Claude Code's input: older builds draw "│ >" in a box; current ones a "❯" prompt
+                // between horizontal rules, with hints like "shift+tab to cycle" underneath.
+                let markers = ["│ >", "│ ❯", "\n❯", "? for shortcuts", "shift+tab to cycle", "esc to interrupt", "for agents", "bypass permissions", "accept edits"]
+                context.isClaudeCodeInput = markers.contains { tail.contains($0) }
             }
-            logger.notice("focus: terminal \(context.bundleID ?? "?", privacy: .public) readable=\(buffer != nil, privacy: .public) chars=\(buffer?.count ?? 0, privacy: .public)")
+            logger.notice("focus: terminal \(context.bundleID ?? "?", privacy: .public) readable=\(buffer != nil, privacy: .public) chars=\(buffer?.count ?? 0, privacy: .public) claudeCode=\(context.isClaudeCodeInput, privacy: .public)")
             return context
         }
 

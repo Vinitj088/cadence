@@ -125,34 +125,58 @@ enum StyleFormatter {
         ("fifth", 5), ("number five", 5), ("sixth", 6), ("number six", 6),
     ]
 
-    /// "I need three things. First, fix the login. Second, update the docs. Third, ship it."
-    /// becomes an intro line and a numbered list. Needs at least two markers, in order.
+    /// Turns a spoken enumeration into an intro and a numbered list:
+    /// "I need three things. First, fix the login. Second, update the docs. Third, ship it." and
+    /// "I need following things, first is the list, second is the check, third is the fixes."
+    ///
+    /// Later markers must start a clause (after punctuation, "and" or "then"), or introduce an item
+    /// ("second is …"). The first may sit mid-sentence only when it introduces an item, so
+    /// "at first I thought… the second time" is left alone. Needs at least two markers in order.
     static func formatLists(_ text: String) -> String {
-        let pattern = #"(?i)(?:^|(?<=[.,;:!?]\s)|(?<=[.,;:!?]\sand\s)|(?<=[.,;:!?]\sthen\s))(firstly|first|secondly|second|thirdly|third|fourthly|fourth|fifth|sixth|number (?:one|two|three|four|five|six)|finally|lastly)\b[,:]?\s+"#
+        let pattern = #"(?i)\b(firstly|first|secondly|second|thirdly|third|fourthly|fourth|fifthly|fifth|sixth|number (?:one|two|three|four|five|six)|finally|lastly)\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
         let ns = text as NSString
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        guard matches.count >= 2 else { return text }
 
+        struct Marker { var range: NSRange; var bodyStart: Int }
+        var markers: [Marker] = []
         var expected = 1
-        var items: [String] = []
-        var bounds: [Int] = []
-        for match in matches {
-            let marker = ns.substring(with: match.range(at: 1)).lowercased()
-            let value = ordinals.first { $0.0 == marker }?.1 ?? (["finally", "lastly"].contains(marker) ? expected : 0)
-            guard value == expected else { return text } // out of order: probably not a list
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let word = ns.substring(with: match.range(at: 1)).lowercased()
+            let value = ordinals.first { $0.0 == word }?.1 ?? (["finally", "lastly"].contains(word) && expected > 2 ? expected : 0)
+            guard value == expected else { continue }
+
+            let before = ns.substring(to: match.range.location).trimmingCharacters(in: .whitespaces).lowercased()
+            let clauseStart = before.isEmpty || ".,;:!?".contains(before.last!) || before.hasSuffix(" and") || before.hasSuffix(" then")
+            let after = ns.substring(from: NSMaxRange(match.range)).lowercased()
+            let introducesItem = after.hasPrefix(",") || after.hasPrefix(":") || after.hasPrefix(" is ") || after.hasPrefix(" would be ")
+            // "First of all" is a figure of speech, not a list.
+            if after.hasPrefix(" of all") { continue }
+            guard clauseStart || introducesItem else { continue }
+
+            // The item starts after the marker and any "is", "would be" or punctuation.
+            var bodyStart = NSMaxRange(match.range)
+            let lead = ns.substring(from: bodyStart)
+            if let r = lead.range(of: #"^[,:]?\s*(?:(?:is|would be)(?:\s+that)?\s+)?"#, options: [.regularExpression, .caseInsensitive]) {
+                bodyStart += lead[r].utf16.count
+            }
+            markers.append(Marker(range: match.range, bodyStart: bodyStart))
             expected += 1
-            bounds.append(match.range.location)
         }
-        let intro = ns.substring(to: bounds[0]).trimmingCharacters(in: .whitespaces)
-        for (k, match) in matches.enumerated() {
-            let start = NSMaxRange(match.range)
-            let end = k + 1 < matches.count ? bounds[k + 1] : ns.length
-            var item = ns.substring(with: NSRange(location: start, length: end - start))
+        guard markers.count >= 2 else { return text }
+
+        var intro = ns.substring(to: markers[0].range.location).trimmingCharacters(in: .whitespaces)
+        intro = intro.replacingOccurrences(of: #"(?i)[,;]?\s*(?:and|then)?\s*$"#, with: "", options: .regularExpression)
+        if let last = intro.last, !".:!?".contains(last) { intro += ":" }
+
+        var items: [String] = []
+        for (k, marker) in markers.enumerated() {
+            let end = k + 1 < markers.count ? markers[k + 1].range.location : ns.length
+            guard end > marker.bodyStart else { return text }
+            var item = ns.substring(with: NSRange(location: marker.bodyStart, length: end - marker.bodyStart))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            item = item.replacingOccurrences(of: #"(?i)[,;]?\s*(and|then)?\s*$"#, with: "", options: .regularExpression)
+            item = item.replacingOccurrences(of: #"(?i)[,;]?\s*(?:and|then)?\s*$"#, with: "", options: .regularExpression)
             item = item.trimmingCharacters(in: CharacterSet(charactersIn: ".,; "))
-            guard item.split(separator: " ").count >= 1 else { return text }
+            guard !item.isEmpty else { return text }
             items.append(TextPostProcessor.capitalizingFirstLetter(item))
         }
         let list = items.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")

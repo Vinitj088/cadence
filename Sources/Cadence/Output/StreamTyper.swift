@@ -11,13 +11,16 @@ final class StreamTyper {
     private(set) var typed = ""
     private let pid: pid_t
     private let leading: String
+    /// Claude Code: a line break is typed as a backslash + Return (a newline there), never a bare Return.
+    private let backslashNewlines: Bool
     private var previous: [String] = []
     private(set) var stopped = false
 
     /// `leading` is prepended to the first word (a space when continuing existing text).
-    init(pid: pid_t, leading: String) {
+    init(pid: pid_t, leading: String, backslashNewlines: Bool = false) {
         self.pid = pid
         self.leading = leading
+        self.backslashNewlines = backslashNewlines
     }
 
     /// Typing only continues while the same app is in front.
@@ -64,7 +67,9 @@ final class StreamTyper {
         if !insert.isEmpty {
             // A typed newline would submit (Claude Code) or run a command; paste multi-line text instead.
             if insert.contains("\n") {
-                if allowPaste { TextInserter.paste(insert, restoreClipboard: true) } else { Self.type(insert.replacingOccurrences(of: "\n", with: " ")) }
+                if backslashNewlines, allowPaste { Self.typeLines(insert) }
+                else if allowPaste { TextInserter.paste(insert, restoreClipboard: true) }
+                else { Self.type(insert.replacingOccurrences(of: "\n", with: " ")) }
             } else {
                 Self.type(insert)
             }
@@ -86,6 +91,27 @@ final class StreamTyper {
                 chunk.withUnsafeBufferPointer { event.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: $0.baseAddress) }
                 event.post(tap: .cgAnnotatedSessionEventTap)
             }
+        }
+    }
+
+    /// Types multi-line text into Claude Code: each line break becomes a backslash + Return.
+    static func typeLines(_ text: String) {
+        let lines = text.components(separatedBy: "\n")
+        for (i, line) in lines.enumerated() {
+            if !line.isEmpty { type(line) }
+            if i < lines.count - 1 {
+                type("\\")
+                pressReturn()
+            }
+        }
+    }
+
+    static func pressReturn() {
+        let source = CGEventSource(stateID: .privateState)
+        for keyDown in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: keyDown)
+            event?.flags = []
+            event?.post(tap: .cgAnnotatedSessionEventTap)
         }
     }
 
