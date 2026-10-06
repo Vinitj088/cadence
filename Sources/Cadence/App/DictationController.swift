@@ -141,6 +141,8 @@ final class DictationController {
         }
 
         focus = FocusContext.capture()
+        // A new take: anything still running for an older take must not touch this one.
+        session += 1
         screenTerms = nil
         screenTermsResult = nil
         if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
@@ -160,7 +162,6 @@ final class DictationController {
             corrections.checkNow()
             if let text = focus.isTerminal ? focus.recentTerminalInput : focus.textBeforeCaret { learning.observe(writtenText: text) }
         }
-        session += 1
         let device = AudioDevices.resolve(uid: prefs.microphoneUID, preferBuiltIn: prefs.preferBuiltInMic)
         do {
             try recorder.start(device: device)
@@ -331,7 +332,11 @@ final class DictationController {
         if prefs.smartFormatting, family == .parakeet, id != "parakeet-unified" {
             text = FluidHelpers.normalize(text)
         }
-        text = processor.process(text)
+        // Words on screen may fix spacing and casing ("dictation controller" → "DictationController"),
+        // but never take part in sound-alike replacement.
+        var postProcessor = processor
+        postProcessor.sessionVocabulary = onScreen
+        text = postProcessor.process(text)
 
         if prefs.aiPolish, focus != nil {
             overlay.show(.polishing)
