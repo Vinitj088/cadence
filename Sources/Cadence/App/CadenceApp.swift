@@ -11,7 +11,9 @@ final class AppEnvironment {
     let history = HistoryStore()
     let learning = LearningStore()
     let styles = AppStyleStore()
-    lazy var dictation = DictationController(prefs: prefs, models: models, history: history, learning: learning, styles: styles)
+    let profile = ProfileStore()
+    let voiceFit = VoiceFit()
+    lazy var dictation = DictationController(prefs: prefs, models: models, history: history, learning: learning, styles: styles, profile: profile, voiceFit: voiceFit)
 }
 
 @main
@@ -27,6 +29,8 @@ struct CadenceApp: App {
                 .environment(env.history)
                 .environment(env.learning)
                 .environment(env.styles)
+                .environment(env.profile)
+                .environment(env.voiceFit)
                 .environment(env.dictation)
                 .frame(minWidth: 820, minHeight: 560)
         }
@@ -44,6 +48,8 @@ struct CadenceApp: App {
                 .environment(env.history)
                 .environment(env.learning)
                 .environment(env.styles)
+                .environment(env.profile)
+                .environment(env.voiceFit)
                 .environment(env.dictation)
         } label: {
             MenuBarIcon(dictation: env.dictation)

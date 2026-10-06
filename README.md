@@ -24,6 +24,20 @@ Everything runs locally on your Mac's Neural Engine. No accounts, no cloud, no s
   - Spoken numbers written as digits.
   - Filler and stutter removal.
   - Spacing and capitalization matched to the text around the cursor.
+- **Fits where you're typing.**
+  - Terminals and editors get code: "git commit dash m" → `git commit -m`, "src slash app dot tsx" → `src/app.tsx`, "camel case user id" → `userId`.
+  - Spoken lists ("first… second… third…") become numbered lists in AI chats, Claude Code and email.
+  - Chat messages lose the final full stop.
+  - Cadence learns your habits per app from small edits you make.
+- **Type as you speak.** Words appear in the app while you talk. The final, more accurate transcript then corrects only what differs.
+- **Talk to the selection.** Select text, hold the key and say "make this more concise". Apple's on-device model rewrites it in place.
+- **Undo the last dictation** with ⌥⌘Z, wherever it was typed.
+- **Learns you, automatically.**
+  - Fixes you make (in normal text fields and in terminals, including Claude Code's input box) teach it names and spellings, matched by sound as well as spelling.
+  - Names visible in the current window guide each take.
+  - A private on-device profile (people, projects, topics) steers every model.
+  - Parakeet runs alongside Cohere or Whisper and wins where it caught your words.
+  - Your corrected takes score every installed model on your own voice.
 - **Optional AI polish** with Apple's on-device language model, which fixes punctuation and self-corrections and is checked so it never rewrites your meaning.
 - **Test on your voice.** Read a passage once, and every installed model transcribes it, ranked by word error rate.
 - **Quality-of-life touches.**

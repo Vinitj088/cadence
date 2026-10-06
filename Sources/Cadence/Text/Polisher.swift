@@ -41,9 +41,9 @@ enum Polisher {
         LanguageModelSession(instructions: instructions).prewarm()
     }
 
-    static func polish(_ text: String, appName: String?, timeout: Duration = .seconds(4)) async -> String? {
+    static func polish(_ text: String, appName: String?, profile: String? = nil, timeout: Duration = .seconds(4)) async -> String? {
         guard isAvailable, text.split(separator: " ").count >= 4 else { return nil }
-        let session = LanguageModelSession(instructions: instructions)
+        let session = LanguageModelSession(instructions: instructions + (profile.map { "\n\nAbout the speaker (for spelling names right): \($0)" } ?? ""))
         let prompt = appName.map { "(Being typed into \($0).)\n\n\(text)" } ?? text
         let options = GenerationOptions(temperature: 0.1, maximumResponseTokens: max(64, text.count / 2 + 64))
 

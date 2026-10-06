@@ -109,6 +109,12 @@ final class Preferences {
     var muffleMedia: Bool { didSet { defaults.set(muffleMedia, forKey: "muffleMedia") } }
     /// Learn names and fixes from the user's corrections and writing, with no manual entry.
     var autoLearn: Bool { didSet { defaults.set(autoLearn, forKey: "autoLearn") } }
+    /// Run Parakeet alongside a slower primary model and merge where they disagree.
+    var twoModelAgreement: Bool { didSet { defaults.set(twoModelAgreement, forKey: "twoModelAgreement") } }
+    /// Use names visible in the current window as vocabulary for that take.
+    var screenContext: Bool { didSet { defaults.set(screenContext, forKey: "screenContext") } }
+    /// Type words into the app while still speaking, then reconcile with the final transcript.
+    var streamTyping: Bool { didSet { defaults.set(streamTyping, forKey: "streamTyping") } }
     var overlayAnchor: OverlayAnchor { didSet { save(overlayAnchor, "overlayAnchor") } }
     var removeFillers: Bool { didSet { defaults.set(removeFillers, forKey: "removeFillers") } }
     var smartFormatting: Bool { didSet { defaults.set(smartFormatting, forKey: "smartFormatting") } }
@@ -126,6 +132,9 @@ final class Preferences {
             "showIdlePill": true,
             "muffleMedia": true,
             "autoLearn": true,
+            "twoModelAgreement": true,
+            "screenContext": true,
+            "streamTyping": true,
             "removeFillers": true,
             "smartFormatting": true,
             "contextAware": true,
@@ -142,6 +151,9 @@ final class Preferences {
         showIdlePill = defaults.bool(forKey: "showIdlePill")
         muffleMedia = defaults.bool(forKey: "muffleMedia")
         autoLearn = defaults.bool(forKey: "autoLearn")
+        twoModelAgreement = defaults.bool(forKey: "twoModelAgreement")
+        screenContext = defaults.bool(forKey: "screenContext")
+        streamTyping = defaults.bool(forKey: "streamTyping")
         overlayAnchor = Self.load("overlayAnchor", defaults) ?? .bottom
         removeFillers = defaults.bool(forKey: "removeFillers")
         smartFormatting = defaults.bool(forKey: "smartFormatting")

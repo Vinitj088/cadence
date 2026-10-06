@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case home, history, models, dictionary, settings
+    case home, history, models, dictionary, you, settings
     var id: String { rawValue }
 
     var title: String {
@@ -10,6 +10,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .history: "History"
         case .models: "Models"
         case .dictionary: "Dictionary"
+        case .you: "You"
         case .settings: "Settings"
         }
     }
@@ -20,6 +21,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .history: "clock.arrow.circlepath"
         case .models: "cpu"
         case .dictionary: "character.book.closed"
+        case .you: "person.crop.circle"
         case .settings: "gearshape"
         }
     }
@@ -61,6 +63,7 @@ struct MainView: View {
                     case .history: HistoryPage()
                     case .models: ModelsPage()
                     case .dictionary: DictionaryPage()
+                    case .you: YouPage()
                     case .settings: SettingsPage()
                     }
                 }

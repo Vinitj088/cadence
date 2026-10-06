@@ -12,6 +12,8 @@ final class CorrectionWatcher {
     var onCorrection: ((_ heard: String, _ written: String) -> Void)?
     /// A formatting habit revealed by an edit (e.g. deleting the full stop), for the place it happened.
     var onStyleEdit: ((_ edit: StyleEdit, _ styleKey: String) -> Void)?
+    /// The user's full corrected version of the dictated text.
+    var onEdited: ((_ text: String) -> Void)?
     /// The place the current watch belongs to.
     private var styleKey = ""
 
@@ -75,6 +77,7 @@ final class CorrectionWatcher {
         guard match.distance > 0, Double(match.distance) <= max(3, Double(n) * 0.5) else { return }
         let found = Array(haystack[match.range])
         reportStyle(from: current.inserted.joined(separator: " "), to: found.joined(separator: " "))
+        onEdited?(found.joined(separator: " "))
         for (heard, written) in WordDiff.corrections(from: current.inserted.joined(separator: " "), to: found.joined(separator: " ")) {
             onCorrection?(heard, written)
         }
@@ -142,6 +145,7 @@ final class CorrectionWatcher {
         let oldText = before.substring(with: NSRange(location: start, length: endBefore - start))
         let newText = now.substring(with: NSRange(location: start, length: endNow - start))
         reportStyle(from: oldText, to: newText)
+        onEdited?(newText)
 
         for (heard, written) in WordDiff.corrections(from: oldText, to: newText) {
             onCorrection?(heard, written)

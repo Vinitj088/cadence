@@ -75,6 +75,7 @@ actor WhisperEngine: TranscriptionEngine {
     /// and the text before the caret teaches it the register and punctuation style.
     private static func prompt(for context: TranscriptionContext) -> String? {
         var parts: [String] = []
+        if let profile = context.profile { parts.append(String(profile.prefix(240))) }
         if !context.vocabulary.isEmpty {
             parts.append("Glossary: " + context.vocabulary.prefix(40).joined(separator: ", ") + ".")
         }

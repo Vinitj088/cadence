@@ -11,6 +11,11 @@ final class DictationController {
     let history: HistoryStore
     let learning: LearningStore
     let styles: AppStyleStore
+    let profile: ProfileStore
+    let voiceFit: VoiceFit
+    /// The history entry for the most recent dictation, so later corrections can be attached to it.
+    private var lastHistoryID: UUID?
+    private var lastActivity = Date()
     let overlay = OverlayController()
 
     private(set) var isRecording = false
@@ -29,16 +34,26 @@ final class DictationController {
     }
     private var focus = FocusContext(hasEditableFocus: true)
     private var previewTask: Task<Void, Never>?
+    /// Types into the app while the user speaks (when enabled and a fast model is available).
+    private var streamer: StreamTyper?
+    /// Distinctive words visible on screen when this take started.
+    private var screenTerms: Task<[String], Never>?
     private var session = 0
 
-    init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore) {
+    init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore, profile: ProfileStore, voiceFit: VoiceFit) {
         self.styles = styles
+        self.profile = profile
+        self.voiceFit = voiceFit
         self.prefs = prefs
         self.models = models
         self.history = history
         self.learning = learning
         corrections.onCorrection = { [weak learning] heard, written in learning?.learnCorrection(heard: heard, written: written) }
         corrections.onStyleEdit = { [weak styles] edit, key in styles?.record(edit, for: key) }
+        corrections.onEdited = { [weak self] text in
+            guard let self, let id = self.lastHistoryID else { return }
+            self.history.setCorrected(id, text: text)
+        }
 
         recorder.meter = overlay.model.meter
         overlay.onAnchorChanged = { [weak self] anchor in self?.prefs.overlayAnchor = anchor }
@@ -61,6 +76,15 @@ final class DictationController {
         undoShortcut.start()
         models.activate(prefs.activeModelID)
         Task { await gate.prepare() }
+        // Background upkeep while the user is idle: refresh the profile and score models on their voice.
+        Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.idleUpkeep() }
+        }
+        Task {
+            // Load the companion once the main model is up, so they don't compete for the Neural Engine.
+            while !models.activeIsReady { try? await Task.sleep(for: .seconds(1)) }
+            models.updateCompanion(enabled: prefs.twoModelAgreement)
+        }
         if prefs.aiPolish { Polisher.prewarm() }
         overlay.model.anchor = prefs.overlayAnchor
         overlay.setIdleVisible(prefs.showIdlePill)
@@ -116,6 +140,15 @@ final class DictationController {
         }
 
         focus = FocusContext.capture()
+        screenTerms = nil
+        if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            let ownVocabulary = Set(vocabulary.map { $0.lowercased() })
+            screenTerms = Task {
+                let text = await Task.detached(priority: .userInitiated) { ScreenContext.visibleText(pid: pid) }.value
+                let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
+                return Array(terms.prefix(40))
+            }
+        }
         if prefs.autoLearn {
             // Corrections made since the last take, and words from what the user is writing now.
             corrections.checkNow()
@@ -135,6 +168,12 @@ final class DictationController {
         overlay.model.reset()
         // Selected text + speech = an instruction about the selection (shown with a ✎ in the pill).
         overlay.model.editingSelection = focus.selectedText != nil && !focus.isTerminal
+        streamer = nil
+        if prefs.streamTyping, !overlay.model.editingSelection, focus.hasEditableFocus,
+           let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            let leading = (!focus.isTerminal && prefs.contextAware && processor.fit("x", before: focus.textBeforeCaret).hasPrefix(" ")) ? " " : ""
+            streamer = StreamTyper(pid: pid, leading: leading)
+        }
         overlay.model.startedAt = Date()
         overlay.show(.listening(handsFree: false))
         Sounds.play(.start, enabled: prefs.playSounds)
@@ -160,6 +199,8 @@ final class DictationController {
         recorder.stop()
         isRecording = false
         muffler.release()
+        streamer?.cancel()
+        streamer = nil
         Sounds.play(.cancel, enabled: prefs.playSounds)
         overlay.hide()
     }
@@ -200,6 +241,8 @@ final class DictationController {
             do {
                 let result = try await self.transcribe(samples, focus: focus)
                 guard !result.text.isEmpty else {
+                    self.streamer?.cancel()
+                    self.streamer = nil
                     self.overlay.flash(.message("Didn't catch that", isError: false), for: 1.6)
                     return
                 }
@@ -208,18 +251,20 @@ final class DictationController {
                 if let selection = focus.selectedText, !focus.isTerminal, SelectionEditor.isInstruction(result.raw) {
                     self.overlay.model.workingLabel = "Editing"
                     self.overlay.show(.polishing)
-                    output = try await SelectionEditor.edit(selection, instruction: result.raw, appName: focus.appName, profile: nil)
+                    output = try await SelectionEditor.edit(selection, instruction: result.raw, appName: focus.appName, profile: self.prefs.autoLearn ? self.profile.promptContext : nil)
                     logger.notice("edited selection: \(selection.count, privacy: .public) → \(output.count, privacy: .public) chars")
                 }
                 self.deliver(output, focus: focus)
-                self.history.add(
-                    HistoryItem(
-                        text: output, rawText: result.raw, modelID: result.modelID,
-                        audioSeconds: seconds, processingSeconds: result.elapsed, appName: focus.appName
-                    ),
-                    audio: self.prefs.keepAudio ? samples : nil
+                let item = HistoryItem(
+                    text: output, rawText: result.raw, modelID: result.modelID,
+                    audioSeconds: seconds, processingSeconds: result.elapsed, appName: focus.appName
                 )
+                self.history.add(item, audio: self.prefs.keepAudio ? samples : nil)
+                self.lastHistoryID = item.id
+                self.lastActivity = Date()
             } catch {
+                // Leave the streamed words in place: they're the best text available.
+                self.streamer = nil
                 logger.error("transcription failed: \(String(describing: error), privacy: .public)")
                 self.overlay.flash(.message((error as? LocalizedError)?.errorDescription ?? "Transcription failed", isError: true), for: 2.5)
             }
@@ -247,14 +292,30 @@ final class DictationController {
             (id, engine) = try await resolveEngine()
         }
 
+        // This take's vocabulary: the user's words, what Cadence learned, and names on screen right now.
+        let onScreen = await screenTermsForTake()
         let context = TranscriptionContext(
             language: "en",
-            vocabulary: vocabulary,
+            vocabulary: vocabulary + onScreen,
             // In a terminal the user's own recent prompts are the useful context, not the screen.
-            precedingText: prefs.contextAware ? (focus?.isTerminal == true ? focus?.recentTerminalInput.map { String($0.suffix(300)) } : focus?.textBeforeCaret) : nil
+            precedingText: prefs.contextAware ? (focus?.isTerminal == true ? focus?.recentTerminalInput.map { String($0.suffix(300)) } : focus?.textBeforeCaret) : nil,
+            profile: prefs.autoLearn ? profile.promptContext : nil
         )
-        let raw = try await engine.transcribe(trimmed, context: context)
+        // Two-model agreement: Parakeet runs alongside (≈0.1 s) and can hear the user's words.
+        let companion = (prefs.twoModelAgreement && overrideEngine == nil && !id.hasPrefix("parakeet")) ? models.companion : nil
+        async let companionText: String? = { () async -> String? in
+            guard let companion else { return nil }
+            return try? await companion.transcribe(trimmed, context: context)
+        }()
+        var raw = try await engine.transcribe(trimmed, context: context)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let other = await companionText?.trimmingCharacters(in: .whitespacesAndNewlines), !other.isEmpty, !raw.isEmpty {
+            let merged = TranscriptMerger.merge(primary: raw, companion: other, vocabulary: context.vocabulary)
+            for d in merged.decisions {
+                logger.notice("agreement: took companion's \(d.companion, privacy: .private) over \(d.primary, privacy: .private)")
+            }
+            raw = merged.text
+        }
         guard !raw.isEmpty, !Self.isHallucination(raw) else {
             return Output(text: "", raw: raw, modelID: id, elapsed: Date().timeIntervalSince(started))
         }
@@ -268,7 +329,7 @@ final class DictationController {
 
         if prefs.aiPolish, focus != nil {
             overlay.show(.polishing)
-            if let polished = await Polisher.polish(text, appName: focus?.appName) {
+            if let polished = await Polisher.polish(text, appName: focus?.appName, profile: prefs.autoLearn ? profile.promptContext : nil) {
                 text = processor.applyVocabulary(processor.applyReplacements(polished))
             }
         }
@@ -310,17 +371,51 @@ final class DictationController {
         }
     }
 
+    private func idleUpkeep() {
+        guard !isRecording, !isProcessing, Date().timeIntervalSince(lastActivity) > 180 else { return }
+        if prefs.autoLearn { profile.refreshIfNeeded(history: history, learning: learning) }
+        voiceFit.runIfDue(history: history, models: models) { [weak self] id, audio in
+            guard let self else { return "" }
+            let engine = try await self.models.temporaryEngine(for: id)
+            let text = try await engine.transcribe(audio, context: TranscriptionContext(vocabulary: self.vocabulary))
+            if id != self.models.activeModelID, engine !== self.models.companion { await engine.unload() }
+            return text
+        }
+    }
+
+    /// Waits briefly for the screen read started at key-down; never holds up a take for it.
+    private func screenTermsForTake() async -> [String] {
+        guard let screenTerms else { return [] }
+        return await withTaskGroup(of: [String]?.self) { group in
+            group.addTask { await screenTerms.value }
+            group.addTask { try? await Task.sleep(for: .milliseconds(250)); return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? []
+        }
+    }
+
     /// The user's own words first, then what Cadence has learned.
     private var vocabulary: [String] {
         guard prefs.autoLearn else { return prefs.vocabulary }
-        let own = Set(prefs.vocabulary.map { $0.lowercased() })
-        return prefs.vocabulary + learning.activeTerms.filter { !own.contains($0.lowercased()) }
+        var seen = Set(prefs.vocabulary.map { $0.lowercased() })
+        var result = prefs.vocabulary
+        for term in learning.activeTerms + profile.terms where seen.insert(term.lowercased()).inserted {
+            result.append(term)
+        }
+        return result
     }
 
     private func deliver(_ text: String, focus: FocusContext) {
         lastText = text
+        let streamed = streamer
+        streamer = nil
         if focus.hasEditableFocus {
-            TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
+            if let streamed, !streamed.typed.isEmpty, !streamed.stopped {
+                streamed.finish(text)
+            } else {
+                TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
+            }
             undo.remember(.init(text: text, element: focus.element, isTerminal: focus.isTerminal, pid: NSWorkspace.shared.frontmostApplication?.processIdentifier))
             if prefs.autoLearn, let element = focus.element {
                 if focus.isTerminal {
@@ -360,18 +455,31 @@ final class DictationController {
     private func startLivePreview() {
         previewTask?.cancel()
         let model = ModelCatalog.info(prefs.activeModelID)
-        guard model.supportsLivePreview, let engine = models.activeEngine, models.activeIsReady else { return }
+        // A fast model drives the preview: the active one if it's Parakeet, else the companion.
+        let engine: (any TranscriptionEngine)?
+        if model.supportsLivePreview, models.activeIsReady { engine = models.activeEngine } else { engine = models.companion }
+        guard let engine else { streamer = nil; return }
         let vocabulary = self.vocabulary
+        let focus = self.focus
         previewTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(900))
+                try? await Task.sleep(for: .milliseconds(self?.streamer == nil ? 900 : 550))
                 guard let self, self.isRecording, !Task.isCancelled else { return }
                 let audio = self.recorder.snapshot()
                 guard audio.count > 12_000 else { continue }
-                let tail = Array(audio.suffix(16_000 * 20))
-                let text = try? await engine.transcribe(tail, context: TranscriptionContext(vocabulary: vocabulary))
-                guard !Task.isCancelled, self.isRecording, let text, !text.isEmpty else { continue }
-                self.overlay.model.livePreview = text
+                if let streamer = self.streamer, audio.count <= 16_000 * 90 {
+                    // Streaming needs the whole take so far, not just the tail.
+                    guard let raw = try? await engine.transcribe(audio, context: TranscriptionContext(vocabulary: vocabulary)),
+                          !Task.isCancelled, self.isRecording, !raw.isEmpty else { continue }
+                    var text = self.processor.process(raw)
+                    if !focus.isTerminal, self.prefs.contextAware { text = self.processor.fit(text, before: focus.textBeforeCaret).trimmingCharacters(in: .whitespaces) }
+                    streamer.update(hypothesis: text)
+                } else {
+                    let tail = Array(audio.suffix(16_000 * 20))
+                    let text = try? await engine.transcribe(tail, context: TranscriptionContext(vocabulary: vocabulary))
+                    guard !Task.isCancelled, self.isRecording, let text, !text.isEmpty else { continue }
+                    self.overlay.model.livePreview = text
+                }
             }
         }
     }

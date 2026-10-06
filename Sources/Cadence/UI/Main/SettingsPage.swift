@@ -54,6 +54,21 @@ struct SettingsPage: View {
                     Toggle("", isOn: $prefs.smartFormatting).labelsHidden().toggleStyle(.switch)
                 }
                 Divider().opacity(0.5)
+                SettingRow(title: "Type as I speak", detail: "Words appear in the app while you talk, then the final, more accurate transcript quietly corrects them.") {
+                    Toggle("", isOn: $prefs.streamTyping).labelsHidden().toggleStyle(.switch)
+                }
+                Divider().opacity(0.5)
+                SettingRow(title: "Two-model agreement", detail: "When you use Cohere or Whisper, Parakeet listens too and wins where it caught one of your words. Adds no delay.") {
+                    Toggle("", isOn: $prefs.twoModelAgreement)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: prefs.twoModelAgreement) { AppEnvironment.shared.models.updateCompanion(enabled: prefs.twoModelAgreement) }
+                }
+                Divider().opacity(0.5)
+                SettingRow(title: "Use names on screen", detail: "Names and terms visible in the window you're dictating into help the models for that take. Nothing is stored.") {
+                    Toggle("", isOn: $prefs.screenContext).labelsHidden().toggleStyle(.switch)
+                }
+                Divider().opacity(0.5)
                 SettingRow(title: "Learn from me", detail: "Picks up names and jargon from what you write, and learns from the fixes you make to dictated text. Stays on this Mac.") {
                     Toggle("", isOn: $prefs.autoLearn).labelsHidden().toggleStyle(.switch)
                 }

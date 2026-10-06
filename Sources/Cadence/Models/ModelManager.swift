@@ -109,6 +109,34 @@ final class ModelManager {
 
     private var generation = 0
 
+    // MARK: - Companion (two-model agreement and live preview for slow models)
+
+    /// Parakeet v2, loaded beside a slower primary model such as Cohere or Whisper.
+    private(set) var companion: (any TranscriptionEngine)?
+    private var companionLoading = false
+
+    func updateCompanion(enabled: Bool) {
+        let needed = enabled && !(activeModelID ?? "").hasPrefix("parakeet") && ModelStorage.isDownloaded("parakeet-v2")
+        if !needed {
+            if let companion { Task { await companion.unload() } }
+            companion = nil
+            return
+        }
+        guard companion == nil, !companionLoading else { return }
+        companionLoading = true
+        Task {
+            let engine = ParakeetEngine(version: .v2)
+            do {
+                try await engine.prepare { _, _ in }
+                self.companion = engine
+                logger.notice("companion parakeet-v2 ready")
+            } catch {
+                logger.error("companion failed: \(error.localizedDescription, privacy: .public)")
+            }
+            self.companionLoading = false
+        }
+    }
+
     private static func isDownloadLabel(_ label: String) -> Bool {
         label.hasPrefix("Downloading") || label.hasPrefix("Preparing download") || label.hasPrefix("Starting")
     }

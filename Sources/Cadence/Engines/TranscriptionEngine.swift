@@ -8,6 +8,8 @@ struct TranscriptionContext: Sendable {
     var vocabulary: [String] = []
     /// Text just before the caret. Whisper uses it as a prompt for style and spelling.
     var precedingText: String?
+    /// The user's private profile (people, projects, topics), for models that take a prompt.
+    var profile: String?
 }
 
 typealias PrepareProgress = @Sendable (_ fraction: Double, _ label: String) -> Void

@@ -14,6 +14,8 @@ struct HistoryItem: Codable, Identifiable, Hashable {
     var processingSeconds: Double
     var appName: String?
     var hasAudio = false
+    /// What the user turned this dictation into, when they fixed it: ground truth for VoiceFit.
+    var correctedText: String?
 
     var wordCount: Int { text.split(whereSeparator: \.isWhitespace).count }
 }
@@ -48,6 +50,12 @@ final class HistoryStore {
     func update(_ item: HistoryItem) {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[i] = item
+        save()
+    }
+
+    func setCorrected(_ id: UUID, text: String) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].correctedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         save()
     }
 

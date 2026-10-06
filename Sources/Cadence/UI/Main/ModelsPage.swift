@@ -155,6 +155,11 @@ private struct ModelCard: View {
     private func use() {
         prefs.activeModelID = model.id
         models.activate(model.id)
+        let enabled = prefs.twoModelAgreement
+        Task {
+            while !models.activeIsReady { try? await Task.sleep(for: .seconds(1)) }
+            models.updateCompanion(enabled: enabled)
+        }
     }
 
     private var sizeText: String {
