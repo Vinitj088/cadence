@@ -149,7 +149,10 @@ final class DictationController {
             screenTerms = Task {
                 let text = await Task.detached(priority: .userInitiated) { ScreenContext.visibleText(pid: pid) }.value
                 let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
-                if self.session == take { self.screenTermsResult = Array(terms.prefix(40)) }
+                if self.session == take {
+                    self.screenTermsResult = Array(terms.prefix(40))
+                    logger.notice("screen: \(text.count, privacy: .public) chars read, \(terms.count, privacy: .public) distinctive words")
+                }
             }
         }
         if prefs.autoLearn {
