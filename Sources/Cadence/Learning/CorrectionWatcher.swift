@@ -18,13 +18,54 @@ final class CorrectionWatcher {
         var id = UUID()
     }
 
+    /// For terminals: no caret to anchor on, so the latest best match on screen is the text.
+    private struct ScreenWatch {
+        let element: AXUIElement
+        var inserted: [String]
+        var id = UUID()
+    }
+
     private var watch: Watch?
+    private var screenWatch: ScreenWatch?
     private let checkTimes: [Double] = [5, 15, 35, 70]
+
+    /// Starts watching `inserted` on a screen-like element (a terminal), where it's found by matching.
+    func watchScreen(_ inserted: String, in element: AXUIElement) {
+        checkNow()
+        watch = nil
+        let words = FuzzyLocate.words(inserted)
+        guard words.count >= 2 else { screenWatch = nil; return }
+        let started = ScreenWatch(element: element, inserted: words)
+        screenWatch = started
+        for delay in checkTimes {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard self?.screenWatch?.id == started.id else { return }
+                self?.checkScreen()
+            }
+        }
+    }
+
+    private func checkScreen() {
+        guard var current = screenWatch, let buffer: String = current.element.attribute(kAXValueAttribute) else { return }
+        // Only the recent part of the scrollback can contain what was just dictated.
+        let haystack = FuzzyLocate.words(String(buffer.suffix(12_000)))
+        guard let match = FuzzyLocate.bestWindow(of: current.inserted, in: haystack) else { return }
+        let n = current.inserted.count
+        // Unchanged, or nothing on screen resembles it any more (cleared, scrolled away).
+        guard match.distance > 0, Double(match.distance) <= max(3, Double(n) * 0.5) else { return }
+        let found = Array(haystack[match.range])
+        for (heard, written) in WordDiff.corrections(from: current.inserted.joined(separator: " "), to: found.joined(separator: " ")) {
+            onCorrection?(heard, written)
+        }
+        current.inserted = found
+        screenWatch = current
+    }
 
     /// Starts watching `inserted`, which was just pasted into `element`.
     func watch(_ inserted: String, in element: AXUIElement) {
         checkNow()
         watch = nil
+        screenWatch = nil
         // Give the target app a moment to apply the paste before taking the baseline.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             guard let self, let value: String = element.attribute(kAXValueAttribute) else { return }
@@ -43,6 +84,7 @@ final class CorrectionWatcher {
 
     /// Compares the field with the baseline and reports any corrections inside the inserted text.
     func checkNow() {
+        if screenWatch != nil { checkScreen() }
         guard var current = watch, let value: String = current.element.attribute(kAXValueAttribute) else { return }
         let now = value as NSString
         let before = current.baseline
@@ -164,7 +206,8 @@ enum WordDiff {
     /// words merged into one (or one split into two), so "type script and roid" against
     /// "TypeScript Android" yields two separate fixes. Pieces must sound alike to count.
     private static func pairUp(_ a: [String], _ b: [String]) -> [(String, String)] {
-        let shapes = [(1, 1), (2, 1), (3, 1), (1, 2)]
+        // (0, 1) and (1, 0) let a word be added or dropped alongside a fix ("a Lexandra" → "Alexandra sir").
+        let shapes = [(1, 1), (2, 1), (3, 1), (1, 2), (0, 1), (1, 0)]
         var best = Array(repeating: Array(repeating: -Double.infinity, count: b.count + 1), count: a.count + 1)
         var step = Array(repeating: Array(repeating: (0, 0), count: b.count + 1), count: a.count + 1)
         best[0][0] = 0
@@ -172,7 +215,7 @@ enum WordDiff {
             for j in 0...b.count where best[i][j] > -.infinity {
                 for (ka, kb) in shapes where i + ka <= a.count && j + kb <= b.count {
                     let x = squash(a[i..<i + ka].joined()), y = squash(b[j..<j + kb].joined())
-                    let score = best[i][j] + similarity(x, y) - 0.5
+                    let score = best[i][j] + (ka == 0 || kb == 0 ? -0.3 : soundSimilarity(x, y) - 0.5)
                     if score > best[i + ka][j + kb] {
                         best[i + ka][j + kb] = score
                         step[i + ka][j + kb] = (ka, kb)
@@ -186,7 +229,7 @@ enum WordDiff {
         while i > 0 || j > 0 {
             let (ka, kb) = step[i][j]
             let heard = a[i - ka..<i].joined(separator: " "), written = b[j - kb..<j].joined(separator: " ")
-            if similarity(squash(heard), squash(written)) >= 0.5 { pairs.append((heard, written)) }
+            if ka > 0, kb > 0, soundSimilarity(squash(heard), squash(written)) >= 0.5 { pairs.append((heard, written)) }
             i -= ka; j -= kb
         }
         return pairs.reversed()
@@ -202,6 +245,31 @@ enum WordDiff {
 
     private static func trimPunctuation(_ s: String) -> String {
         s.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:\"“”()"))
+    }
+
+    /// How alike two strings are as spoken: the better of their spelling similarity and the
+    /// similarity of their phonetic keys. "happy now" and "habanero" look different but sound alike.
+    static func soundSimilarity(_ x: String, _ y: String) -> Double {
+        max(similarity(x, y), similarity(phoneticKey(x), phoneticKey(y)))
+    }
+
+    /// A rough English sound skeleton: merge digraphs, drop silent-ish h/w, fold voiced and
+    /// unvoiced pairs (b/p, d/t, g/k, v/f, z/s), reduce every vowel to one, collapse repeats.
+    static func phoneticKey(_ s: String) -> String {
+        var t = s.lowercased().filter(\.isLetter)
+        for (from, to) in [("ph", "f"), ("bh", "b"), ("dh", "d"), ("kh", "k"), ("gh", "g"), ("th", "t"), ("sh", "s"), ("ch", "c"), ("ck", "k"), ("qu", "k"), ("x", "ks")] {
+            t = t.replacingOccurrences(of: from, with: to)
+        }
+        let map: [Character: Character] = [
+            "b": "p", "d": "t", "g": "k", "v": "f", "z": "s", "c": "k", "q": "k", "j": "c",
+            "a": "a", "e": "a", "i": "a", "o": "a", "u": "a", "y": "a",
+        ]
+        var out: [Character] = []
+        for ch in t where ch != "h" && ch != "w" {
+            let mapped = map[ch] ?? ch
+            if out.last != mapped { out.append(mapped) }
+        }
+        return String(out)
     }
 
     /// 1 − normalised character edit distance.

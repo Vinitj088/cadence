@@ -111,7 +111,7 @@ final class DictationController {
         if prefs.autoLearn {
             // Corrections made since the last take, and words from what the user is writing now.
             corrections.checkNow()
-            if let text = focus.textBeforeCaret { learning.observe(writtenText: text) }
+            if let text = focus.isTerminal ? focus.recentTerminalInput : focus.textBeforeCaret { learning.observe(writtenText: text) }
         }
         session += 1
         let device = AudioDevices.resolve(uid: prefs.microphoneUID, preferBuiltIn: prefs.preferBuiltInMic)
@@ -233,7 +233,8 @@ final class DictationController {
         let context = TranscriptionContext(
             language: "en",
             vocabulary: vocabulary,
-            precedingText: prefs.contextAware ? focus?.textBeforeCaret : nil
+            // In a terminal the user's own recent prompts are the useful context, not the screen.
+            precedingText: prefs.contextAware ? (focus?.isTerminal == true ? focus?.recentTerminalInput.map { String($0.suffix(300)) } : focus?.textBeforeCaret) : nil
         )
         let raw = try await engine.transcribe(trimmed, context: context)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -254,7 +255,7 @@ final class DictationController {
                 text = processor.applyVocabulary(processor.applyReplacements(polished))
             }
         }
-        if prefs.contextAware, let focus {
+        if prefs.contextAware, let focus, !focus.isTerminal {
             text = processor.fit(text, before: focus.textBeforeCaret)
         }
         return Output(text: text, raw: raw, modelID: id, elapsed: Date().timeIntervalSince(started))
@@ -299,7 +300,9 @@ final class DictationController {
         lastText = text
         if focus.hasEditableFocus {
             TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
-            if prefs.autoLearn, let element = focus.element { corrections.watch(text, in: element) }
+            if prefs.autoLearn, let element = focus.element {
+                if focus.isTerminal { corrections.watchScreen(text, in: element) } else { corrections.watch(text, in: element) }
+            }
             overlay.flash(.inserted, for: 0.7)
         } else {
             TextInserter.copy(text)

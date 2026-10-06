@@ -1,6 +1,7 @@
 import Foundation
 
 /// Deterministic cleanup applied to every transcript, regardless of engine.
+@MainActor
 struct TextPostProcessor {
     var removeFillers = true
     var smartFormatting = true
@@ -14,6 +15,7 @@ struct TextPostProcessor {
 
         if removeFillers { text = Self.stripFillers(text) }
         text = Self.collapseStutters(text)
+        text = applySoundAlikeNames(text)
         text = applyVocabulary(text)
         text = applyReplacements(text)
         if smartFormatting { text = Self.applyVoiceCommands(text) }
@@ -103,6 +105,41 @@ struct TextPostProcessor {
             t = t.replacingOccurrences(of: #"(?i)(?<![\w])"# + pattern + #"(?![\w])"#, with: NSRegularExpression.escapedTemplate(for: term), options: .regularExpression)
         }
         return t
+    }
+
+    /// Swaps garbled renderings of known names for the name itself: "a Lexandra" → "Alexandra".
+    /// Only phrases containing a non-dictionary word are touched, so ordinary speech that merely
+    /// sounds similar ("I'm happy now") is never rewritten.
+    func applySoundAlikeNames(_ text: String) -> String {
+        let names = vocabulary.filter { $0.count >= 4 && !$0.contains(" ") }
+        guard !names.isEmpty else { return text }
+        var tokens = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let nameKeys = names.map { ($0, WordDiff.phoneticKey($0)) }
+        var i = 0
+        while i < tokens.count {
+            var replaced = false
+            for length in stride(from: 3, through: 1, by: -1) where i + length <= tokens.count {
+                let window = tokens[i..<i + length].map(TermExtractor.clean)
+                guard window.contains(where: { !$0.isEmpty && !TermExtractor.isEnglishWord($0) }),
+                      !window.contains(where: { w in names.contains { $0.caseInsensitiveCompare(w) == .orderedSame } })
+                else { continue }
+                let key = WordDiff.phoneticKey(window.joined())
+                guard key.count >= 3,
+                      let (name, _) = nameKeys
+                        .map({ ($0.0, WordDiff.similarity(key, $0.1)) })
+                        .filter({ $0.1 >= 0.7 })
+                        .max(by: { $0.1 < $1.1 })
+                else { continue }
+                // Keep the punctuation that followed the garbled phrase.
+                let trailing = String(tokens[i + length - 1].reversed().prefix { !$0.isLetter && !$0.isNumber }.reversed())
+                tokens.replaceSubrange(i..<i + length, with: [name + trailing])
+                replaced = true
+                break
+            }
+            i += 1
+            _ = replaced
+        }
+        return tokens.joined(separator: " ")
     }
 
     func applyReplacements(_ text: String) -> String {

@@ -93,6 +93,11 @@ final class LearningStore {
         let written = written.trimmingCharacters(in: .whitespacesAndNewlines)
         // Single letters are too ambiguous to learn from.
         guard heard.count >= 2, written.count >= 2, heard != written else { return }
+        // "So" → "so" is a style habit, not a mishearing; only names deserve a case fix.
+        if heard.lowercased() == written.lowercased(),
+           written.split(separator: " ").allSatisfy({ TermExtractor.isEnglishWord(TermExtractor.clean(String($0))) }) {
+            return
+        }
         let key = Self.key(heard, written)
         guard !snapshot.blocked.contains(key) else { return }
 
