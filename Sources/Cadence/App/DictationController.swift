@@ -182,7 +182,7 @@ final class DictationController {
         streamer = nil
         if prefs.streamTyping, !overlay.model.editingSelection, focus.hasEditableFocus,
            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            let leading = (!focus.isTerminal && prefs.contextAware && processor.fit("x", before: focus.textBeforeCaret).hasPrefix(" ")) ? " " : ""
+            let leading = needsLeadingSpace(focus) ? " " : ""
             streamer = StreamTyper(pid: pid, leading: leading, backslashNewlines: focus.isTerminal && focus.isClaudeCodeInput)
         }
         overlay.model.startedAt = Date()
@@ -359,6 +359,10 @@ final class DictationController {
         if prefs.smartFormatting, let focus {
             text = StyleFormatter.apply(text, rules: styles.rules(for: focus))
         }
+        // Claude Code: continuing text already in the input box needs a separating space.
+        if let focus, focus.isTerminal, needsLeadingSpace(focus), !text.hasPrefix(" ") {
+            text = " " + text
+        }
         return Output(text: text, raw: raw, modelID: id, elapsed: Date().timeIntervalSince(started))
     }
 
@@ -400,6 +404,15 @@ final class DictationController {
             if id != self.models.activeModelID, engine !== self.models.companion { await engine.unload() }
             return text
         }
+    }
+
+    /// Whether a new dictation must start with a space to separate it from text already there.
+    private func needsLeadingSpace(_ focus: FocusContext) -> Bool {
+        if focus.isTerminal {
+            guard let input = focus.terminalInput, let last = input.last else { return false }
+            return !last.isWhitespace && !"([{\"'/".contains(last)
+        }
+        return prefs.contextAware && processor.fit("x", before: focus.textBeforeCaret).hasPrefix(" ")
     }
 
     /// Uses the screen read started at key-down if it finished; waits at most 0.25 s for it.
