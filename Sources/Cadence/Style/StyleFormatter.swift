@@ -165,7 +165,7 @@ enum StyleFormatter {
         guard markers.count >= 2 else { return text }
 
         var intro = ns.substring(to: markers[0].range.location).trimmingCharacters(in: .whitespaces)
-        intro = intro.replacingOccurrences(of: #"(?i)[,;]?\s*(?:and|then)?\s*$"#, with: "", options: .regularExpression)
+        intro = intro.replacingOccurrences(of: #"(?i)(?:\s*(?:[,;]|\band\b|\bthen\b))*\s*$"#, with: "", options: .regularExpression)
         if let last = intro.last, !".:!?".contains(last) { intro += ":" }
 
         var items: [String] = []
@@ -174,7 +174,7 @@ enum StyleFormatter {
             guard end > marker.bodyStart else { return text }
             var item = ns.substring(with: NSRange(location: marker.bodyStart, length: end - marker.bodyStart))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            item = item.replacingOccurrences(of: #"(?i)[,;]?\s*(?:and|then)?\s*$"#, with: "", options: .regularExpression)
+            item = item.replacingOccurrences(of: #"(?i)(?:\s*(?:[,;]|\band\b|\bthen\b))*\s*$"#, with: "", options: .regularExpression)
             item = item.trimmingCharacters(in: CharacterSet(charactersIn: ".,; "))
             guard !item.isEmpty else { return text }
             items.append(TextPostProcessor.capitalizingFirstLetter(item))
