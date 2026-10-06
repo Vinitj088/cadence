@@ -37,7 +37,8 @@ final class DictationController {
     /// Types into the app while the user speaks (when enabled and a fast model is available).
     private var streamer: StreamTyper?
     /// Distinctive words visible on screen when this take started.
-    private var screenTerms: Task<[String], Never>?
+    private var screenTerms: Task<Void, Never>?
+    private var screenTermsResult: [String]?
     private var session = 0
 
     init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore, profile: ProfileStore, voiceFit: VoiceFit) {
@@ -141,12 +142,14 @@ final class DictationController {
 
         focus = FocusContext.capture()
         screenTerms = nil
+        screenTermsResult = nil
         if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let ownVocabulary = Set(vocabulary.map { $0.lowercased() })
+            let take = session
             screenTerms = Task {
                 let text = await Task.detached(priority: .userInitiated) { ScreenContext.visibleText(pid: pid) }.value
                 let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
-                return Array(terms.prefix(40))
+                if self.session == take { self.screenTermsResult = Array(terms.prefix(40)) }
             }
         }
         if prefs.autoLearn {
@@ -383,16 +386,15 @@ final class DictationController {
         }
     }
 
-    /// Waits briefly for the screen read started at key-down; never holds up a take for it.
+    /// Uses the screen read started at key-down if it finished; waits at most 0.25 s for it.
+    /// (Polling, not a task group: a group would wait for a slow read to finish before returning.)
     private func screenTermsForTake() async -> [String] {
-        guard let screenTerms else { return [] }
-        return await withTaskGroup(of: [String]?.self) { group in
-            group.addTask { await screenTerms.value }
-            group.addTask { try? await Task.sleep(for: .milliseconds(250)); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? []
+        guard screenTerms != nil else { return [] }
+        let deadline = Date().addingTimeInterval(0.25)
+        while screenTermsResult == nil, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
         }
+        return screenTermsResult ?? []
     }
 
     /// The user's own words first, then what Cadence has learned.

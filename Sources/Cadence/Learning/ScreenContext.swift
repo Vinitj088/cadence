@@ -20,6 +20,8 @@ enum ScreenContext {
         while !queue.isEmpty, visited < maxNodes, total < maxChars, Date().timeIntervalSince(start) < deadline {
             let element = queue.removeFirst()
             visited += 1
+            // Each read gives up quickly; one unresponsive element must not stall the whole scan.
+            AXUIElementSetMessagingTimeout(element, 0.05)
             let role: String? = element.attribute(kAXRoleAttribute)
             if role == "AXSecureTextField" || (element.attribute(kAXSubroleAttribute) as String?) == kAXSecureTextFieldSubrole { continue }
             if let role, textRoles.contains(role) {
