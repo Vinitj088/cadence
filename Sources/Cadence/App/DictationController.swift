@@ -39,6 +39,8 @@ final class DictationController {
     /// Distinctive words visible on screen when this take started.
     private var screenTerms: Task<Void, Never>?
     private var screenTermsResult: [String]?
+    /// File paths visible on screen when this take started.
+    private var screenPaths: [String] = []
     private var session = 0
 
     init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore, profile: ProfileStore, voiceFit: VoiceFit) {
@@ -145,6 +147,7 @@ final class DictationController {
         session += 1
         screenTerms = nil
         screenTermsResult = nil
+        screenPaths = []
         if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let ownVocabulary = Set(vocabulary.map { $0.lowercased() })
             let take = session
@@ -152,8 +155,9 @@ final class DictationController {
                 let text = await Task.detached(priority: .userInitiated) { ScreenContext.visibleText(pid: pid) }.value
                 let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
                 if self.session == take {
+                    self.screenPaths = ScreenSnapper.paths(in: text)
                     self.screenTermsResult = Array(terms.prefix(40))
-                    logger.notice("screen: \(text.count, privacy: .public) chars read, \(terms.count, privacy: .public) distinctive words")
+                    logger.notice("screen: \(text.count, privacy: .public) chars read, \(terms.count, privacy: .public) distinctive words, \(self.screenPaths.count, privacy: .public) paths")
                 }
             }
         }
@@ -337,6 +341,10 @@ final class DictationController {
         var postProcessor = processor
         postProcessor.sessionVocabulary = onScreen
         text = postProcessor.process(text)
+        // Spoken file paths and names that are on screen right now, written exactly as shown.
+        if !onScreen.isEmpty || !screenPaths.isEmpty {
+            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary)
+        }
 
         if prefs.aiPolish, focus != nil {
             overlay.show(.polishing)
