@@ -46,6 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>NSAudioCaptureUsageDescription</key><string>While you dictate, Cadence muffles other apps' audio so you can focus. Nothing is recorded or stored.</string>
   <key>NSMicrophoneUsageDescription</key><string>Cadence listens only while you hold your dictation key, and transcribes on this Mac.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>

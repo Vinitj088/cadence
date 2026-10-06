@@ -9,6 +9,8 @@ struct FocusContext {
     var textBeforeCaret: String?
     /// True when a text-accepting element has focus. False is a confident "nowhere to type".
     var hasEditableFocus: Bool
+    /// The focused element, for noticing corrections afterwards. Nil for password fields.
+    var element: AXUIElement?
 
     static func capture() -> FocusContext {
         let app = NSWorkspace.shared.frontmostApplication
@@ -28,6 +30,11 @@ struct FocusContext {
         if let role: String = focused.attribute(kAXRoleAttribute), inert.contains(role) {
             context.hasEditableFocus = false
         }
+
+        // Never read or remember anything from password fields.
+        let subrole: String? = focused.attribute(kAXSubroleAttribute)
+        if subrole == kAXSecureTextFieldSubrole { return context }
+        context.element = focused
 
         if let value: String = focused.attribute(kAXValueAttribute),
            let rangeValue: AXValue = focused.attribute(kAXSelectedTextRangeAttribute) {

@@ -54,6 +54,10 @@ struct SettingsPage: View {
                     Toggle("", isOn: $prefs.smartFormatting).labelsHidden().toggleStyle(.switch)
                 }
                 Divider().opacity(0.5)
+                SettingRow(title: "Learn from me", detail: "Picks up names and jargon from what you write, and learns from the fixes you make to dictated text. Stays on this Mac.") {
+                    Toggle("", isOn: $prefs.autoLearn).labelsHidden().toggleStyle(.switch)
+                }
+                Divider().opacity(0.5)
                 SettingRow(title: "Match surrounding text", detail: "Reads the text before your cursor to get spacing and capitalization right, and gives Whisper it as context.") {
                     Toggle("", isOn: $prefs.contextAware).labelsHidden().toggleStyle(.switch)
                 }
@@ -84,6 +88,10 @@ struct SettingsPage: View {
                     }
                     .labelsHidden()
                     .fixedSize()
+                }
+                Divider().opacity(0.5)
+                SettingRow(title: "Muffle background audio", detail: "While you dictate, music and videos keep playing but sound like they're behind a wall, so you can think. macOS asks once for System Audio Recording access.") {
+                    Toggle("", isOn: $prefs.muffleMedia).labelsHidden().toggleStyle(.switch)
                 }
                 Divider().opacity(0.5)
                 SettingRow(title: "Sounds", detail: "A soft chime when recording starts and stops.") {

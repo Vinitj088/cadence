@@ -9,6 +9,7 @@ final class DictationController {
     let prefs: Preferences
     let models: ModelManager
     let history: HistoryStore
+    let learning: LearningStore
     let overlay = OverlayController()
 
     private(set) var isRecording = false
@@ -19,14 +20,18 @@ final class DictationController {
     private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
     private let gate = SpeechGate()
+    private let muffler = MediaMuffler()
+    private let corrections = CorrectionWatcher()
     private var focus = FocusContext(hasEditableFocus: true)
     private var previewTask: Task<Void, Never>?
     private var session = 0
 
-    init(prefs: Preferences, models: ModelManager, history: HistoryStore) {
+    init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore) {
         self.prefs = prefs
         self.models = models
         self.history = history
+        self.learning = learning
+        corrections.onCorrection = { [weak learning] heard, written in learning?.learnCorrection(heard: heard, written: written) }
 
         recorder.meter = overlay.model.meter
         overlay.onAnchorChanged = { [weak self] anchor in self?.prefs.overlayAnchor = anchor }
@@ -103,6 +108,11 @@ final class DictationController {
         }
 
         focus = FocusContext.capture()
+        if prefs.autoLearn {
+            // Corrections made since the last take, and words from what the user is writing now.
+            corrections.checkNow()
+            if let text = focus.textBeforeCaret { learning.observe(writtenText: text) }
+        }
         session += 1
         let device = AudioDevices.resolve(uid: prefs.microphoneUID, preferBuiltIn: prefs.preferBuiltInMic)
         do {
@@ -118,6 +128,7 @@ final class DictationController {
         overlay.model.startedAt = Date()
         overlay.show(.listening(handsFree: false))
         Sounds.play(.start, enabled: prefs.playSounds)
+        if prefs.muffleMedia { muffler.engage() }
         startLivePreview()
 
         // Watchdog: if the chosen device delivers nothing, fall back to the system default input.
@@ -138,6 +149,7 @@ final class DictationController {
         previewTask?.cancel()
         recorder.stop()
         isRecording = false
+        muffler.release()
         Sounds.play(.cancel, enabled: prefs.playSounds)
         overlay.hide()
     }
@@ -150,6 +162,7 @@ final class DictationController {
         let samples = recorder.stop()
         let peak = recorder.peakLevel
         isRecording = false
+        muffler.release()
         Sounds.play(.stop, enabled: prefs.playSounds)
 
         let seconds = Double(samples.count) / AudioRecorder.sampleRate
@@ -219,7 +232,7 @@ final class DictationController {
 
         let context = TranscriptionContext(
             language: "en",
-            vocabulary: prefs.vocabulary,
+            vocabulary: vocabulary,
             precedingText: prefs.contextAware ? focus?.textBeforeCaret : nil
         )
         let raw = try await engine.transcribe(trimmed, context: context)
@@ -251,8 +264,8 @@ final class DictationController {
         TextPostProcessor(
             removeFillers: prefs.removeFillers,
             smartFormatting: prefs.smartFormatting,
-            vocabulary: prefs.vocabulary,
-            replacements: prefs.replacements
+            vocabulary: vocabulary,
+            replacements: prefs.replacements + (prefs.autoLearn ? learning.activeReplacements : [])
         )
     }
 
@@ -275,10 +288,18 @@ final class DictationController {
         }
     }
 
+    /// The user's own words first, then what Cadence has learned.
+    private var vocabulary: [String] {
+        guard prefs.autoLearn else { return prefs.vocabulary }
+        let own = Set(prefs.vocabulary.map { $0.lowercased() })
+        return prefs.vocabulary + learning.activeTerms.filter { !own.contains($0.lowercased()) }
+    }
+
     private func deliver(_ text: String, focus: FocusContext) {
         lastText = text
         if focus.hasEditableFocus {
             TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
+            if prefs.autoLearn, let element = focus.element { corrections.watch(text, in: element) }
             overlay.flash(.inserted, for: 0.7)
         } else {
             TextInserter.copy(text)
@@ -299,7 +320,7 @@ final class DictationController {
         previewTask?.cancel()
         let model = ModelCatalog.info(prefs.activeModelID)
         guard model.supportsLivePreview, let engine = models.activeEngine, models.activeIsReady else { return }
-        let vocabulary = prefs.vocabulary
+        let vocabulary = self.vocabulary
         previewTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(900))

@@ -105,6 +105,10 @@ final class Preferences {
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: "playSounds") } }
     /// Keep a thin resting pill on screen between dictations, Dynamic Island style.
     var showIdlePill: Bool { didSet { defaults.set(showIdlePill, forKey: "showIdlePill") } }
+    /// Muffle other apps' audio (music, videos) while dictating, without pausing it.
+    var muffleMedia: Bool { didSet { defaults.set(muffleMedia, forKey: "muffleMedia") } }
+    /// Learn names and fixes from the user's corrections and writing, with no manual entry.
+    var autoLearn: Bool { didSet { defaults.set(autoLearn, forKey: "autoLearn") } }
     var overlayAnchor: OverlayAnchor { didSet { save(overlayAnchor, "overlayAnchor") } }
     var removeFillers: Bool { didSet { defaults.set(removeFillers, forKey: "removeFillers") } }
     var smartFormatting: Bool { didSet { defaults.set(smartFormatting, forKey: "smartFormatting") } }
@@ -120,6 +124,8 @@ final class Preferences {
             "preferBuiltInMic": true,
             "playSounds": true,
             "showIdlePill": true,
+            "muffleMedia": true,
+            "autoLearn": true,
             "removeFillers": true,
             "smartFormatting": true,
             "contextAware": true,
@@ -134,6 +140,8 @@ final class Preferences {
         preferBuiltInMic = defaults.bool(forKey: "preferBuiltInMic")
         playSounds = defaults.bool(forKey: "playSounds")
         showIdlePill = defaults.bool(forKey: "showIdlePill")
+        muffleMedia = defaults.bool(forKey: "muffleMedia")
+        autoLearn = defaults.bool(forKey: "autoLearn")
         overlayAnchor = Self.load("overlayAnchor", defaults) ?? .bottom
         removeFillers = defaults.bool(forKey: "removeFillers")
         smartFormatting = defaults.bool(forKey: "smartFormatting")

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DictionaryPage: View {
     @Environment(Preferences.self) private var prefs
+    @Environment(LearningStore.self) private var learning
     @ViewState private var newTerm = ""
     @ViewState private var newSpoken = ""
     @ViewState private var newWritten = ""
@@ -9,7 +10,9 @@ struct DictionaryPage: View {
     var body: some View {
         @Bindable var prefs = prefs
         VStack(alignment: .leading, spacing: 24) {
-            PageHeader(title: "Dictionary", subtitle: "Teach Cadence your names, jargon and spellings.")
+            PageHeader(title: "Dictionary", subtitle: "Cadence learns your names and spellings as you work. You can add your own too.")
+
+            LearnedCard(learning: learning, enabled: prefs.autoLearn)
 
             Card(
                 title: "Vocabulary",
@@ -117,6 +120,77 @@ struct DictionaryPage: View {
         prefs.replacements.append(Replacement(spoken: spoken, written: newWritten))
         newSpoken = ""
         newWritten = ""
+    }
+}
+
+/// What Cadence picked up on its own, each item removable (and then never relearned).
+private struct LearnedCard: View {
+    var learning: LearningStore
+    var enabled: Bool
+
+    var body: some View {
+        Card(
+            title: "Learned automatically",
+            subtitle: enabled
+                ? "From the fixes you make to dictated text and the words you write. Remove anything that's wrong; it won't be learned again."
+                : "Learning is off. Turn on “Learn from me” in Settings."
+        ) {
+            let terms = learning.activeTerms
+            let fixes = learning.activeCorrections
+            if terms.isEmpty && fixes.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles").foregroundStyle(.secondary)
+                    Text("Nothing yet. Fix a word Cadence got wrong, and it'll remember.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            } else {
+                if !terms.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(terms, id: \.self) { term in
+                            HStack(spacing: 5) {
+                                Text(term).font(.system(size: 12.5, weight: .medium))
+                                Button {
+                                    withAnimation(.smooth(duration: 0.2)) { learning.forgetTerm(term) }
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .help("Forget")
+                            }
+                            .padding(.leading, 10)
+                            .padding(.trailing, 8)
+                            .padding(.vertical, 5)
+                            .background(Capsule().strokeBorder(Color.brand.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                            .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                }
+                if !fixes.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(fixes, id: \.self) { fix in
+                            HStack {
+                                Text(fix.heard).font(.system(size: 12.5)).foregroundStyle(.secondary).strikethrough(color: .secondary.opacity(0.5))
+                                Image(systemName: "arrow.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+                                Text(fix.written).font(.system(size: 12.5, weight: .medium))
+                                Spacer()
+                                Text(fix.count == 1 ? "once" : "\(fix.count)×").font(.system(size: 11)).foregroundStyle(.tertiary)
+                                Button {
+                                    withAnimation(.smooth(duration: 0.2)) { learning.forgetCorrection(fix) }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.tertiary)
+                                .help("Forget")
+                            }
+                            .padding(.vertical, 7)
+                            if fix != fixes.last { Divider().opacity(0.5) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
