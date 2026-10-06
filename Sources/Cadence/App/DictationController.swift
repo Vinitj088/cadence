@@ -10,6 +10,7 @@ final class DictationController {
     let models: ModelManager
     let history: HistoryStore
     let learning: LearningStore
+    let styles: AppStyleStore
     let overlay = OverlayController()
 
     private(set) var isRecording = false
@@ -22,16 +23,22 @@ final class DictationController {
     private let gate = SpeechGate()
     private let muffler = MediaMuffler()
     private let corrections = CorrectionWatcher()
+    private let undo = DictationUndo()
+    @ObservationIgnored private lazy var undoShortcut = GlobalShortcut(keyCode: 6 /* Z */, flags: [.maskCommand, .maskAlternate]) { [weak self] in
+        self?.undoLastDictation()
+    }
     private var focus = FocusContext(hasEditableFocus: true)
     private var previewTask: Task<Void, Never>?
     private var session = 0
 
-    init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore) {
+    init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore) {
+        self.styles = styles
         self.prefs = prefs
         self.models = models
         self.history = history
         self.learning = learning
         corrections.onCorrection = { [weak learning] heard, written in learning?.learnCorrection(heard: heard, written: written) }
+        corrections.onStyleEdit = { [weak styles] edit, key in styles?.record(edit, for: key) }
 
         recorder.meter = overlay.model.meter
         overlay.onAnchorChanged = { [weak self] anchor in self?.prefs.overlayAnchor = anchor }
@@ -51,6 +58,7 @@ final class DictationController {
         logger.notice("start: ax=\(Permissions.accessibility, privacy: .public) mic=\(String(describing: Permissions.microphone), privacy: .public) key=\(self.prefs.triggerKey.rawValue, privacy: .public)")
         hotkey.triggerKey = prefs.triggerKey
         hotkey.start()
+        undoShortcut.start()
         models.activate(prefs.activeModelID)
         Task { await gate.prepare() }
         if prefs.aiPolish { Polisher.prewarm() }
@@ -125,6 +133,8 @@ final class DictationController {
         isRecording = true
         overlay.model.anchor = prefs.overlayAnchor
         overlay.model.reset()
+        // Selected text + speech = an instruction about the selection (shown with a ✎ in the pill).
+        overlay.model.editingSelection = focus.selectedText != nil && !focus.isTerminal
         overlay.model.startedAt = Date()
         overlay.show(.listening(handsFree: false))
         Sounds.play(.start, enabled: prefs.playSounds)
@@ -194,10 +204,17 @@ final class DictationController {
                     return
                 }
                 logger.notice("transcribed in \(result.elapsed, privacy: .public)s: \(result.text.count, privacy: .public) chars")
-                self.deliver(result.text, focus: focus)
+                var output = result.text
+                if let selection = focus.selectedText, !focus.isTerminal, SelectionEditor.isInstruction(result.raw) {
+                    self.overlay.model.workingLabel = "Editing"
+                    self.overlay.show(.polishing)
+                    output = try await SelectionEditor.edit(selection, instruction: result.raw, appName: focus.appName, profile: nil)
+                    logger.notice("edited selection: \(selection.count, privacy: .public) → \(output.count, privacy: .public) chars")
+                }
+                self.deliver(output, focus: focus)
                 self.history.add(
                     HistoryItem(
-                        text: result.text, rawText: result.raw, modelID: result.modelID,
+                        text: output, rawText: result.raw, modelID: result.modelID,
                         audioSeconds: seconds, processingSeconds: result.elapsed, appName: focus.appName
                     ),
                     audio: self.prefs.keepAudio ? samples : nil
@@ -258,6 +275,10 @@ final class DictationController {
         if prefs.contextAware, let focus, !focus.isTerminal {
             text = processor.fit(text, before: focus.textBeforeCaret)
         }
+        // Per-place style: code in terminals and editors, lists in prompts and email, chat habits.
+        if prefs.smartFormatting, let focus {
+            text = StyleFormatter.apply(text, rules: styles.rules(for: focus))
+        }
         return Output(text: text, raw: raw, modelID: id, elapsed: Date().timeIntervalSince(started))
     }
 
@@ -300,8 +321,13 @@ final class DictationController {
         lastText = text
         if focus.hasEditableFocus {
             TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
+            undo.remember(.init(text: text, element: focus.element, isTerminal: focus.isTerminal, pid: NSWorkspace.shared.frontmostApplication?.processIdentifier))
             if prefs.autoLearn, let element = focus.element {
-                if focus.isTerminal { corrections.watchScreen(text, in: element) } else { corrections.watch(text, in: element) }
+                if focus.isTerminal {
+                    corrections.watchScreen(text, in: element, styleKey: focus.styleKey)
+                } else {
+                    corrections.watch(text, in: element, styleKey: focus.styleKey)
+                }
             }
             overlay.flash(.inserted, for: 0.7)
         } else {
@@ -309,6 +335,18 @@ final class DictationController {
             overlay.flash(.copied, for: 1.8)
         }
     }
+
+    /// Removes the most recent dictation from where it was typed (⌥⌘Z).
+    func undoLastDictation() {
+        guard !isRecording, undo.last != nil else {
+            overlay.flash(.message("Nothing to undo", isError: false), for: 1.2)
+            return
+        }
+        undo.undo()
+        overlay.flash(.message("Removed last dictation", isError: false), for: 1.2)
+    }
+
+    var canUndo: Bool { undo.last != nil }
 
     func pasteLast() {
         guard let lastText else { return }

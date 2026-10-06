@@ -17,6 +17,7 @@ struct MenuBarContent: View {
         Button(dictation.isRecording ? "Stop Dictation" : "Start Dictation") { dictation.toggle() }
         Button("Paste Last Transcript") { dictation.pasteLast() }
             .disabled(dictation.lastText == nil)
+        Button("Undo Last Dictation  ⌥⌘Z") { dictation.undoLastDictation() }
 
         Divider()
 

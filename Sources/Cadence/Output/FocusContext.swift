@@ -16,6 +16,15 @@ struct FocusContext {
     var isTerminal = false
     /// What the user recently typed into this terminal (prompt lines), for learning vocabulary.
     var recentTerminalInput: String?
+    /// Title of the focused window: tells Gmail from Claude from YouTube inside a browser.
+    var windowTitle: String?
+    /// Claude Code's input box is open in this terminal (multi-line input is safe).
+    var isClaudeCodeInput = false
+    /// Text currently selected in the focused field, if any.
+    var selectedText: String?
+
+    var category: AppCategory { AppCategory.detect(bundleID: bundleID, windowTitle: windowTitle) }
+    var styleKey: String { AppCategory.styleKey(bundleID: bundleID, windowTitle: windowTitle) }
 
     static let terminalBundleIDs: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
@@ -28,6 +37,11 @@ struct FocusContext {
         context.isTerminal = terminalBundleIDs.contains(app?.bundleIdentifier ?? "")
         guard AXIsProcessTrusted() else { return context }
         if let app { exposeAccessibility(of: app) }
+
+        let appElement = app.map { AXUIElementCreateApplication($0.processIdentifier) }
+        if let window: AXUIElement = appElement?.attribute(kAXFocusedWindowAttribute) {
+            context.windowTitle = window.attribute(kAXTitleAttribute)
+        }
 
         let system = AXUIElementCreateSystemWide()
         guard let focused: AXUIElement = system.attribute(kAXFocusedUIElementAttribute) else {
@@ -51,8 +65,16 @@ struct FocusContext {
         if context.isTerminal {
             let buffer: String? = focused.attribute(kAXValueAttribute)
             context.recentTerminalInput = buffer.map(Self.promptLines)
+            if let tail = buffer?.suffix(1_500) {
+                // Claude Code draws its prompt as a box whose input line starts with "│ >".
+                context.isClaudeCodeInput = tail.contains("│ >") || tail.contains("│ ❯") || tail.contains("? for shortcuts")
+            }
             logger.notice("focus: terminal \(context.bundleID ?? "?", privacy: .public) readable=\(buffer != nil, privacy: .public) chars=\(buffer?.count ?? 0, privacy: .public)")
             return context
+        }
+
+        if let selected: String = focused.attribute(kAXSelectedTextAttribute), !selected.isEmpty {
+            context.selectedText = selected
         }
 
         if let value: String = focused.attribute(kAXValueAttribute),
@@ -66,7 +88,7 @@ struct FocusContext {
             }
         }
         let role: String? = focused.attribute(kAXRoleAttribute)
-        logger.notice("focus: \(context.bundleID ?? "?", privacy: .public) role=\(role ?? "?", privacy: .public) readable=\(context.textBeforeCaret != nil, privacy: .public)")
+        logger.notice("focus: \(context.bundleID ?? "?", privacy: .public) role=\(role ?? "?", privacy: .public) readable=\(context.textBeforeCaret != nil, privacy: .public) category=\(context.category.rawValue, privacy: .public)")
         return context
     }
 

@@ -129,6 +129,13 @@ struct OverlayView: View {
                         .help("Cancel (Esc)")
                         .transition(.opacity.combined(with: .scale(scale: 0.5)))
                 }
+                if model.editingSelection, model.phase != .transcribing {
+                    Image(systemName: "pencil.line")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .help("Say what to do with the selected text")
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
                 PillBars(meter: model.meter, mode: model.phase == .transcribing ? .racing : .live)
                     .frame(width: handsFree ? 112 : 128, height: 24)
                 if handsFree {
@@ -146,7 +153,7 @@ struct OverlayView: View {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                     .symbolEffect(.pulse, options: .repeating)
-                Text("Polishing")
+                Text(model.workingLabel)
             }
             .pillText()
 

@@ -10,6 +10,25 @@ import ApplicationServices
 @MainActor
 final class CorrectionWatcher {
     var onCorrection: ((_ heard: String, _ written: String) -> Void)?
+    /// A formatting habit revealed by an edit (e.g. deleting the full stop), for the place it happened.
+    var onStyleEdit: ((_ edit: StyleEdit, _ styleKey: String) -> Void)?
+    /// The place the current watch belongs to.
+    private var styleKey = ""
+
+    /// Compares the dictated text with what the user turned it into, for style habits only.
+    private func reportStyle(from old: String, to new: String) {
+        let a = old.trimmingCharacters(in: .whitespacesAndNewlines), b = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !a.isEmpty, !b.isEmpty, a != b else { return }
+        if a.hasSuffix("."), !b.hasSuffix("."), b == String(a.dropLast()) || b.hasSuffix(String(a.dropLast().suffix(12))) {
+            onStyleEdit?(.removedTrailingPeriod, styleKey)
+        } else if !a.hasSuffix("."), b.hasSuffix("."), String(b.dropLast()).hasSuffix(String(a.suffix(12))) {
+            onStyleEdit?(.addedTrailingPeriod, styleKey)
+        }
+        if let x = a.first, let y = b.first, x.lowercased() == y.lowercased(), a.dropFirst().prefix(12) == b.dropFirst().prefix(12) {
+            if x.isUppercase, y.isLowercase { onStyleEdit?(.lowercasedStart, styleKey) }
+            if x.isLowercase, y.isUppercase { onStyleEdit?(.capitalizedStart, styleKey) }
+        }
+    }
 
     private struct Watch {
         let element: AXUIElement
@@ -30,8 +49,9 @@ final class CorrectionWatcher {
     private let checkTimes: [Double] = [5, 15, 35, 70]
 
     /// Starts watching `inserted` on a screen-like element (a terminal), where it's found by matching.
-    func watchScreen(_ inserted: String, in element: AXUIElement) {
+    func watchScreen(_ inserted: String, in element: AXUIElement, styleKey: String) {
         checkNow()
+        self.styleKey = styleKey
         watch = nil
         let words = FuzzyLocate.words(inserted)
         guard words.count >= 2 else { screenWatch = nil; return }
@@ -54,6 +74,7 @@ final class CorrectionWatcher {
         // Unchanged, or nothing on screen resembles it any more (cleared, scrolled away).
         guard match.distance > 0, Double(match.distance) <= max(3, Double(n) * 0.5) else { return }
         let found = Array(haystack[match.range])
+        reportStyle(from: current.inserted.joined(separator: " "), to: found.joined(separator: " "))
         for (heard, written) in WordDiff.corrections(from: current.inserted.joined(separator: " "), to: found.joined(separator: " ")) {
             onCorrection?(heard, written)
         }
@@ -62,8 +83,9 @@ final class CorrectionWatcher {
     }
 
     /// Starts watching `inserted`, which was just pasted into `element`.
-    func watch(_ inserted: String, in element: AXUIElement) {
+    func watch(_ inserted: String, in element: AXUIElement, styleKey: String) {
         checkNow()
+        self.styleKey = styleKey
         watch = nil
         screenWatch = nil
         // Give the target app a moment to apply the paste before taking the baseline.
@@ -119,6 +141,7 @@ final class CorrectionWatcher {
         guard endNow >= start, endNow <= now.length else { return }
         let oldText = before.substring(with: NSRange(location: start, length: endBefore - start))
         let newText = now.substring(with: NSRange(location: start, length: endNow - start))
+        reportStyle(from: oldText, to: newText)
 
         for (heard, written) in WordDiff.corrections(from: oldText, to: newText) {
             onCorrection?(heard, written)

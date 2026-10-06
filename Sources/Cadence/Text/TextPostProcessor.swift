@@ -153,7 +153,7 @@ struct TextPostProcessor {
 
     // MARK: - Casing helpers
 
-    static func capitalizingFirstLetter(_ s: String) -> String {
+    nonisolated static func capitalizingFirstLetter(_ s: String) -> String {
         guard let i = s.firstIndex(where: \.isLetter) else { return s }
         return s.replacingCharacters(in: i...i, with: s[i].uppercased())
     }

@@ -23,6 +23,10 @@ final class OverlayModel {
     /// Between dictations, rest as a thin dash instead of disappearing.
     var showsIdle = true
     var isHoveringIdle = false
+    /// Text was selected when dictation started: speech is an instruction about it.
+    var editingSelection = false
+    /// What the pill says while a language model works ("Polishing", "Editing").
+    var workingLabel = "Polishing"
 
     /// Fed by the recorder; read by the waveform every frame. Not observed.
     @ObservationIgnored let meter = LevelMeter()
@@ -39,5 +43,6 @@ final class OverlayModel {
     func reset() {
         meter.reset()
         livePreview = ""
+        workingLabel = "Polishing"
     }
 }
