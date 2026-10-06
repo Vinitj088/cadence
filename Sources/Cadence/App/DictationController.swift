@@ -469,8 +469,6 @@ final class DictationController {
         if focus.hasEditableFocus {
             if let streamed, !streamed.typed.isEmpty, !streamed.stopped {
                 streamed.finish(text)
-            } else if focus.isTerminal, focus.isClaudeCodeInput, text.contains("\n") {
-                StreamTyper.typeLines(text)
             } else {
                 TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
             }

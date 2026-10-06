@@ -131,7 +131,8 @@ enum CodeFormatter {
                 glue = detached.contains(previous) || previous.isEmpty ? .right : .both
             } else if let (s, g) = symbols[key], key != "dash" || isFlagLike(next) {
                 symbol = s
-                glue = g
+                // "fourth is slash compact" → "fourth is /compact", not "is/compact".
+                glue = (g == .both && (detached.contains(previous) || previous.isEmpty)) ? .right : g
             }
 
             if let symbol {
@@ -171,6 +172,7 @@ enum CodeFormatter {
     private static let detached: Set<String> = [
         "cat", "open", "ls", "cd", "vim", "vi", "nano", "code", "touch", "rm", "mv", "cp", "source", "edit", "read", "check",
         "run", "in", "the", "to", "at", "from", "and", "or", "a", "an", "my", "our", "your", "with", "file", "me", "email", "is",
+        "are", "was", "be", "use", "type", "say", "it", "this", "that", "then", "of", "for", "on", "command", "try",
     ]
 
     private static func bare(_ word: String) -> String {

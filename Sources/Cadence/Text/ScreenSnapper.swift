@@ -70,7 +70,9 @@ enum ScreenSnapper {
         while i < words.count {
             let word = squash(words[i])
             // "at dictation controller" → "@Sources/…/DictationController.swift"
-            if mentions, word == "at", i + 1 < words.count,
+            let previous = i > 0 ? squash(words[i - 1]) : ""
+            let mentionVerbs: Set<String> = ["open", "read", "check", "edit", "update", "see", "review", "in", "inside", "into", "from", "look", "fix", "change", "refactor"]
+            if mentions, word == "at" || (word == "a" && mentionVerbs.contains(previous)), i + 1 < words.count,
                let candidates = fileTargets[String(squash(words[i + 1]).prefix(2))],
                let match = bestMatch(words, from: i + 1, among: candidates, minimum: 4) {
                 let trailing = String(words[match.end].reversed().prefix { ".,;:!?".contains($0) }.reversed())

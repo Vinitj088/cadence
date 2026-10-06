@@ -54,6 +54,11 @@ actor ProjectIndex {
             return root
         }
         guard let title: String = window.attribute(kAXTitleAttribute) else { return nil }
+        // Terminal titles can carry the tab's tty ("… — ttys005"): its foreground process knows the folder.
+        if let tty = title.range(of: #"ttys\d+"#, options: .regularExpression).map({ String(title[$0]) }),
+           let cwd = foregroundDirectory(tty: tty), let root = gitRoot(from: cwd) {
+            return root
+        }
         let candidates = title.components(separatedBy: CharacterSet(charactersIn: "—–-|:"))
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && $0.count <= 60 && !$0.contains("×") }
@@ -72,6 +77,23 @@ actor ProjectIndex {
             }
         }
         return nil
+    }
+
+    /// The working directory of the foreground process on a terminal tty (e.g. the running `claude`).
+    static func foregroundDirectory(tty: String) -> URL? {
+        guard let output = run(["ps", "-t", tty, "-o", "pid=,stat=,comm="], timeout: 1) else { return nil }
+        let rows = output.split(separator: "\n").map { $0.split(separator: " ", omittingEmptySubsequences: true) }.filter { $0.count >= 3 }
+        // Prefer the foreground job ("+" in its state), then anything that looks like an agent.
+        let foreground = rows.filter { $0[1].contains("+") }
+        let pick = foreground.last { $0[2].contains("claude") || $0[2].contains("node") || $0[2].contains("codex") } ?? foreground.last ?? rows.last
+        guard let pick, let pid = Int32(pick[0]) else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let path = withUnsafePointer(to: info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return path.isEmpty ? nil : URL(fileURLWithPath: path, isDirectory: true)
     }
 
     static func gitRoot(from url: URL) -> URL? {
@@ -136,7 +158,7 @@ actor ProjectIndex {
         return chars.dropFirst().contains(where: \.isUppercase) && chars.contains(where: \.isLowercase)
     }
 
-    private static func run(_ arguments: [String], timeout: TimeInterval) -> String? {
+    static func run(_ arguments: [String], timeout: TimeInterval) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments

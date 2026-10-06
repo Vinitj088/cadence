@@ -12,7 +12,7 @@ enum SelfCorrection {
     private static let scratch = ["scratch that", "delete that", "strike that", "forget that", "ignore that"]
 
     static func apply(_ text: String) -> String {
-        var t = text
+        var t = restarts(text)
         // "… Scratch that." drops the sentence (or clause) just before it.
         for cue in scratch {
             while let r = t.range(of: cue, options: .caseInsensitive) {
@@ -38,12 +38,43 @@ enum SelfCorrection {
         return t
     }
 
+    /// "we should use, actually we should probably choose SQLite" → "we should probably choose SQLite":
+    /// a soft cue ("actually", "I mean") counts only when the speaker then restarts a phrase they
+    /// just said, which is what makes it a correction rather than ordinary speech.
+    private static func restarts(_ text: String) -> String {
+        var words = text.split(separator: " ").map(String.init)
+        let key = { (w: String) in w.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" } }
+        var i = 0
+        while i < words.count {
+            let cueLength = key(words[i]) == "actually" ? 1 : (i + 1 < words.count && key(words[i]) == "i" && key(words[i + 1]) == "mean" ? 2 : 0)
+            guard cueLength > 0, i + cueLength + 1 < words.count, i > 0 else { i += 1; continue }
+            let next = (key(words[i + cueLength]), key(words[i + cueLength + 1]))
+            // The restarted two-word phrase, said again within the previous ten words.
+            let window = max(0, i - 10)
+            if let start = (window..<max(window, i - 1)).reversed().first(where: { key(words[$0]) == next.0 && key(words[$0 + 1]) == next.1 }) {
+                let wasCapitalised = words[start].first?.isUppercase == true
+                words.removeSubrange(start..<(i + cueLength))
+                // Keep a sentence-initial capital on the restarted phrase.
+                if wasCapitalised, start < words.count, let first = words[start].first {
+                    words[start] = first.uppercased() + words[start].dropFirst()
+                }
+                i = start
+            } else {
+                i += 1
+            }
+        }
+        return words.joined(separator: " ")
+    }
+
     /// Finds where the corrected phrase starts in `before`: at an earlier copy of the
     /// replacement's first word ("at 3 … at 4"), else it replaces as many words as it has
     /// up to its first pause (at most three).
     private static func splice(before: String, replacement: String) -> String {
         var words = before.split(separator: " ").map(String.init)
-        let replacementWords = replacement.split(separator: " ").map(String.init)
+        // "no wait, actually, um, we should…": the filler after the cue isn't part of the fix.
+        let weak: Set<String> = ["actually", "um", "uh", "so", "well", "like", "basically", "okay", "ok"]
+        let replacementWords = Array(replacement.split(separator: " ").map(String.init)
+            .drop { weak.contains($0.lowercased().trimmingCharacters(in: .punctuationCharacters)) })
         guard let firstNew = replacementWords.first?.lowercased().trimmingCharacters(in: .punctuationCharacters), !words.isEmpty else {
             return before + " " + replacement
         }

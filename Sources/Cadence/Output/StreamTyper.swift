@@ -67,8 +67,8 @@ final class StreamTyper {
         if !insert.isEmpty {
             // A typed newline would submit (Claude Code) or run a command; paste multi-line text instead.
             if insert.contains("\n") {
-                if backslashNewlines, allowPaste { Self.typeLines(insert) }
-                else if allowPaste { TextInserter.paste(insert, restoreClipboard: true) }
+                // Pasted line breaks stay in the input (bracketed paste); typed ones would submit.
+                if allowPaste { TextInserter.paste(insert, restoreClipboard: true) }
                 else { Self.type(insert.replacingOccurrences(of: "\n", with: " ")) }
             } else {
                 Self.type(insert)
