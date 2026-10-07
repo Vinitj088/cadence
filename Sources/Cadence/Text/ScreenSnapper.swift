@@ -29,24 +29,49 @@ enum ScreenSnapper {
         let written: String
         let parts: [String]
         let isPath: Bool
+        /// From a large pool (a whole project): only a near-exact spelling match counts, never a
+        /// sound-alike, or ordinary speech gets snapped onto code ("number one" → NumberInput).
+        var strict = false
         var key: String { parts.joined() }
+    }
+
+    /// Web domains and email addresses on screen, e.g. "mugammaconsultants.com".
+    static func domains(in text: String) -> [String] {
+        let pattern = #"\b[A-Za-z0-9._%+-]*@?[A-Za-z0-9-]{3,}(?:\.[A-Za-z0-9-]+)*\.(?:com|in|io|ai|org|net|dev|app|co|co\.in|us|uk)\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        var seen = Set<String>()
+        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+            let domain = ns.substring(with: match.range)
+            return domain.count >= 8 && seen.insert(domain.lowercased()).inserted ? domain : nil
+        }
     }
 
     /// - paths: file paths on screen; identifiers: names on screen, in the project and vocabulary;
     /// - files: project files (repo-relative) for "at <file>" mentions, when `mentions` is on.
-    static func snap(_ text: String, paths: [String], identifiers: [String], files: [String] = [], mentions: Bool = false) -> String {
+    static func snap(_ text: String, paths: [String], identifiers: [String], projectSymbols: [String] = [], domains: [String] = [],
+                     files: [String] = [], mentions: Bool = false) -> String {
         var targets: [Target] = paths.map { Target(written: $0, parts: pathParts($0), isPath: true) }
         var seen = Set<String>()
         for identifier in identifiers where isCompoundIdentifier(identifier) {
             let written = base(identifier)
             if seen.insert(written).inserted { targets.append(Target(written: written, parts: identifierParts(identifier), isPath: false)) }
         }
+        for symbol in projectSymbols where isCompoundIdentifier(symbol) {
+            let written = base(symbol)
+            if seen.insert(written).inserted { targets.append(Target(written: written, parts: identifierParts(symbol), isPath: false, strict: true)) }
+        }
+        // "mu gamma consultants dot com" → "mugammaconsultants.com"
+        for domain in domains where seen.insert(domain).inserted {
+            let parts = domain.split(whereSeparator: { ".@-_".contains($0) }).map { squash(String($0)) }.filter { !$0.isEmpty }
+            if parts.count >= 2 { targets.append(Target(written: domain, parts: parts, isPath: false, strict: true)) }
+        }
         // File names, extension included: "screen context swift" → "ScreenContext.swift".
         for file in files {
             let name = (file as NSString).lastPathComponent
             let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
             guard isCompoundIdentifier(stem), !ext.isEmpty, seen.insert(name).inserted else { continue }
-            targets.append(Target(written: name, parts: identifierParts(stem) + [squash(ext)], isPath: false))
+            targets.append(Target(written: name, parts: identifierParts(stem) + [squash(ext)], isPath: false, strict: true))
         }
         // Bucket by the first two letters so each spoken word is only tried against plausible targets.
         var buckets: [String: [Target]] = [:]
@@ -61,7 +86,7 @@ enum ScreenSnapper {
                     .flatMap { $0.split(whereSeparator: { "-_.".contains($0) }).map(String.init) }
                     .map(squash).filter { !$0.isEmpty }
                 guard !parts.isEmpty, parts.joined().count >= 4 else { continue }
-                fileTargets[String(parts[0].prefix(2)), default: []].append(Target(written: "@" + file, parts: parts, isPath: false))
+                fileTargets[String(parts[0].prefix(2)), default: []].append(Target(written: "@" + file, parts: parts, isPath: false, strict: true))
             }
         }
 
@@ -98,7 +123,12 @@ enum ScreenSnapper {
         guard !first.isEmpty else { return nil }
         var best: (target: Target, end: Int, partCount: Int, score: Double, length: Int)?
         // Small function words are never part of a name unless the name itself contains them.
-        let glue: Set<String> = ["and", "the", "of", "to", "in", "for", "with", "a", "an", "or", "is", "it", "on", "at", "but", "so", "that", "this"]
+        let glue: Set<String> = ["and", "the", "of", "to", "in", "for", "with", "a", "an", "or", "is", "it", "on", "at", "but", "so", "that", "this",
+                                 // List markers must survive for list formatting.
+                                 "number", "first", "second", "third", "fourth", "fifth", "sixth", "firstly", "secondly", "thirdly", "finally", "lastly"]
+        let listWords: Set<String> = ["number", "first", "second", "third", "fourth", "fifth", "sixth", "firstly", "secondly", "thirdly", "finally", "lastly"]
+        // A list word ("number one") may start a name only when the spelling matches exactly ("number input").
+        let exactOnly = listWords.contains(first)
         for target in candidates where startsLike(first, target.parts[0]) {
             var spoken = ""
             let maxWords = target.isPath ? 16 : target.parts.count + 3
@@ -112,8 +142,9 @@ enum ScreenSnapper {
                         let prefix = target.parts.prefix(count).joined()
                         guard prefix.count >= minimum, abs(prefix.count - spoken.count) <= max(3, prefix.count / 4),
                               endsLike(key, target.parts[count - 1]) else { continue }
-                        let raw = max(WordDiff.similarity(spoken, prefix), WordDiff.similarity(WordDiff.phoneticKey(spoken), WordDiff.phoneticKey(prefix)))
-                        guard raw >= 0.8 else { continue }
+                        let spelling = WordDiff.similarity(spoken, prefix)
+                        let raw = target.strict ? spelling : max(spelling, WordDiff.similarity(WordDiff.phoneticKey(spoken), WordDiff.phoneticKey(prefix)))
+                        guard raw >= (exactOnly ? 1.0 : target.strict ? 0.9 : 0.8), !exactOnly || spelling >= 1.0 else { continue }
                         // Best match first; between near-ties prefer types (Capitalised) and longer names.
                         let score = raw + (target.written.first?.isUppercase == true ? 0.015 : 0) + Double(prefix.count) * 0.001
                         if best == nil || score > best!.score {

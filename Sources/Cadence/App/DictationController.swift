@@ -41,6 +41,7 @@ final class DictationController {
     private var screenTermsResult: [String]?
     /// File paths visible on screen when this take started.
     private var screenPaths: [String] = []
+    private var screenDomains: [String] = []
     /// The codebase behind the focused terminal or editor, when there is one.
     private var project: ProjectSnapshot?
     private var session = 0
@@ -150,6 +151,7 @@ final class DictationController {
         screenTerms = nil
         screenTermsResult = nil
         screenPaths = []
+        screenDomains = []
         project = nil
         if [.terminal, .code].contains(focus.category), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let take = session
@@ -167,6 +169,7 @@ final class DictationController {
                 let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
                 if self.session == take {
                     self.screenPaths = ScreenSnapper.paths(in: text)
+                    self.screenDomains = ScreenSnapper.domains(in: text)
                     self.screenTermsResult = Array(terms.prefix(40))
                     logger.notice("screen: \(text.count, privacy: .public) chars read, \(terms.count, privacy: .public) distinctive words, \(self.screenPaths.count, privacy: .public) paths")
                 }
@@ -364,9 +367,9 @@ final class DictationController {
         let mentions = (focus?.isClaudeCodeInput ?? false) || focus?.category == .code || focus?.category == .aiChat
         let projectSymbols = devContext ? (project?.symbols ?? []) : []
         let projectFiles = devContext ? (project?.files ?? []) : []
-        if !onScreen.isEmpty || !screenPaths.isEmpty || !projectSymbols.isEmpty {
-            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary + projectSymbols,
-                                      files: projectFiles, mentions: mentions && project != nil)
+        if !onScreen.isEmpty || !screenPaths.isEmpty || !projectSymbols.isEmpty || !screenDomains.isEmpty {
+            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary, projectSymbols: projectSymbols,
+                                      domains: screenDomains, files: projectFiles, mentions: mentions && project != nil)
         }
         // "slash compact" → "/compact" in Claude Code.
         if focus?.isClaudeCodeInput == true { text = SlashCommands.apply(text) }
