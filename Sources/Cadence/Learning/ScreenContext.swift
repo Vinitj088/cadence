@@ -26,9 +26,12 @@ enum ScreenContext {
             if role == "AXSecureTextField" || (element.attribute(kAXSubroleAttribute) as String?) == kAXSecureTextFieldSubrole { continue }
             if let role, textRoles.contains(role) {
                 for attribute in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
-                    if let text: String = element.attribute(attribute), !text.isEmpty, text.count < 4_000 {
-                        pieces.append(text)
-                        total += text.count
+                    if let text: String = element.attribute(attribute), !text.isEmpty {
+                        // Big elements (a terminal's whole screen, a long document): the most recent
+                        // part is what's near the cursor and what the user is talking about.
+                        let piece = text.count > 8_000 ? String(text.suffix(8_000)) : text
+                        pieces.append(piece)
+                        total += piece.count
                     }
                 }
             }

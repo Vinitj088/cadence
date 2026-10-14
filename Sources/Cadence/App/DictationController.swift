@@ -39,6 +39,11 @@ final class DictationController {
     /// Distinctive words visible on screen when this take started.
     private var screenTerms: Task<Void, Never>?
     private var screenTermsResult: [String]?
+    /// File paths visible on screen when this take started.
+    private var screenPaths: [String] = []
+    private var screenDomains: [String] = []
+    /// The codebase behind the focused terminal or editor, when there is one.
+    private var project: ProjectSnapshot?
     private var session = 0
 
     init(prefs: Preferences, models: ModelManager, history: HistoryStore, learning: LearningStore, styles: AppStyleStore, profile: ProfileStore, voiceFit: VoiceFit) {
@@ -141,15 +146,33 @@ final class DictationController {
         }
 
         focus = FocusContext.capture()
+        // A new take: anything still running for an older take must not touch this one.
+        session += 1
         screenTerms = nil
         screenTermsResult = nil
+        screenPaths = []
+        screenDomains = []
+        project = nil
+        if [.terminal, .code].contains(focus.category), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            let take = session
+            Task {
+                guard let root = await Task.detached(priority: .userInitiated, operation: { ProjectIndex.root(pid: pid) }).value,
+                      let snapshot = await ProjectIndex.shared.snapshot(for: root), self.session == take else { return }
+                self.project = snapshot
+            }
+        }
         if prefs.screenContext, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             let ownVocabulary = Set(vocabulary.map { $0.lowercased() })
             let take = session
             screenTerms = Task {
                 let text = await Task.detached(priority: .userInitiated) { ScreenContext.visibleText(pid: pid) }.value
                 let terms = TermExtractor.candidates(in: text).filter { !ownVocabulary.contains($0.lowercased()) }
-                if self.session == take { self.screenTermsResult = Array(terms.prefix(40)) }
+                if self.session == take {
+                    self.screenPaths = ScreenSnapper.paths(in: text)
+                    self.screenDomains = ScreenSnapper.domains(in: text)
+                    self.screenTermsResult = Array(terms.prefix(40))
+                    logger.notice("screen: \(text.count, privacy: .public) chars read, \(terms.count, privacy: .public) distinctive words, \(self.screenPaths.count, privacy: .public) paths")
+                }
             }
         }
         if prefs.autoLearn {
@@ -157,7 +180,6 @@ final class DictationController {
             corrections.checkNow()
             if let text = focus.isTerminal ? focus.recentTerminalInput : focus.textBeforeCaret { learning.observe(writtenText: text) }
         }
-        session += 1
         let device = AudioDevices.resolve(uid: prefs.microphoneUID, preferBuiltIn: prefs.preferBuiltInMic)
         do {
             try recorder.start(device: device)
@@ -174,7 +196,7 @@ final class DictationController {
         streamer = nil
         if prefs.streamTyping, !overlay.model.editingSelection, focus.hasEditableFocus,
            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            let leading = (!focus.isTerminal && prefs.contextAware && processor.fit("x", before: focus.textBeforeCaret).hasPrefix(" ")) ? " " : ""
+            let leading = needsLeadingSpace(focus) ? " " : ""
             streamer = StreamTyper(pid: pid, leading: leading, backslashNewlines: focus.isTerminal && focus.isClaudeCodeInput)
         }
         overlay.model.startedAt = Date()
@@ -295,11 +317,14 @@ final class DictationController {
             (id, engine) = try await resolveEngine()
         }
 
-        // This take's vocabulary: the user's words, what Cadence learned, and names on screen right now.
+        // This take's vocabulary: the user's words, what Cadence learned, names on screen right now,
+        // and the files most recently worked on in this project.
         let onScreen = await screenTermsForTake()
+        let projectHints = (project?.recentFiles ?? []).map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension }
+            .filter(ProjectIndex.isCompound).prefix(25)
         let context = TranscriptionContext(
             language: "en",
-            vocabulary: vocabulary + onScreen,
+            vocabulary: vocabulary + onScreen + projectHints,
             // In a terminal the user's own recent prompts are the useful context, not the screen.
             precedingText: prefs.contextAware ? (focus?.isTerminal == true ? focus?.recentTerminalInput.map { String($0.suffix(300)) } : focus?.textBeforeCaret) : nil,
             profile: prefs.autoLearn ? profile.promptContext : nil
@@ -328,7 +353,26 @@ final class DictationController {
         if prefs.smartFormatting, family == .parakeet, id != "parakeet-unified" {
             text = FluidHelpers.normalize(text)
         }
-        text = processor.process(text)
+        // Words on screen may fix spacing and casing ("dictation controller" → "DictationController"),
+        // but never take part in sound-alike replacement.
+        var postProcessor = processor
+        postProcessor.sessionVocabulary = onScreen
+        text = postProcessor.process(text)
+        let devContext = focus.map { [.terminal, .code, .aiChat].contains($0.category) } ?? false
+        // "Use Postgres, no wait, SQLite" → "Use SQLite": agents take prompts literally.
+        if prefs.removeFillers { text = SelfCorrection.apply(text) }
+        // "cloud code" → "Claude Code", "j gpt" → "ChatGPT", "type script" → "TypeScript"…
+        if prefs.smartFormatting { text = DevGlossary.apply(text, devContext: devContext) }
+        // Names and paths on screen or in the project, written exactly; "at <file>" → "@path".
+        let mentions = (focus?.isClaudeCodeInput ?? false) || focus?.category == .code || focus?.category == .aiChat
+        let projectSymbols = devContext ? (project?.symbols ?? []) : []
+        let projectFiles = devContext ? (project?.files ?? []) : []
+        if !onScreen.isEmpty || !screenPaths.isEmpty || !projectSymbols.isEmpty || !screenDomains.isEmpty {
+            text = ScreenSnapper.snap(text, paths: screenPaths, identifiers: onScreen + vocabulary, projectSymbols: projectSymbols,
+                                      domains: screenDomains, files: projectFiles, mentions: mentions && project != nil)
+        }
+        // "slash compact" → "/compact" in Claude Code.
+        if focus?.isClaudeCodeInput == true { text = SlashCommands.apply(text) }
 
         if prefs.aiPolish, focus != nil {
             overlay.show(.polishing)
@@ -342,6 +386,10 @@ final class DictationController {
         // Per-place style: code in terminals and editors, lists in prompts and email, chat habits.
         if prefs.smartFormatting, let focus {
             text = StyleFormatter.apply(text, rules: styles.rules(for: focus))
+        }
+        // Claude Code: continuing text already in the input box needs a separating space.
+        if let focus, focus.isTerminal, needsLeadingSpace(focus), !text.hasPrefix(" ") {
+            text = " " + text
         }
         return Output(text: text, raw: raw, modelID: id, elapsed: Date().timeIntervalSince(started))
     }
@@ -386,6 +434,15 @@ final class DictationController {
         }
     }
 
+    /// Whether a new dictation must start with a space to separate it from text already there.
+    private func needsLeadingSpace(_ focus: FocusContext) -> Bool {
+        if focus.isTerminal {
+            guard let input = focus.terminalInput, let last = input.last else { return false }
+            return !last.isWhitespace && !"([{\"'/".contains(last)
+        }
+        return prefs.contextAware && processor.fit("x", before: focus.textBeforeCaret).hasPrefix(" ")
+    }
+
     /// Uses the screen read started at key-down if it finished; waits at most 0.25 s for it.
     /// (Polling, not a task group: a group would wait for a slow read to finish before returning.)
     private func screenTermsForTake() async -> [String] {
@@ -415,8 +472,6 @@ final class DictationController {
         if focus.hasEditableFocus {
             if let streamed, !streamed.typed.isEmpty, !streamed.stopped {
                 streamed.finish(text)
-            } else if focus.isTerminal, focus.isClaudeCodeInput, text.contains("\n") {
-                StreamTyper.typeLines(text)
             } else {
                 TextInserter.paste(text, restoreClipboard: prefs.restoreClipboard)
             }

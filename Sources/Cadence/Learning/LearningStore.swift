@@ -93,6 +93,14 @@ final class LearningStore {
         let written = written.trimmingCharacters(in: .whitespacesAndNewlines)
         // Single letters are too ambiguous to learn from.
         guard heard.count >= 2, written.count >= 2, heard != written else { return }
+        // Only letters, digits and ordinary punctuation: stray keystrokes ("list.Ωz") aren't corrections.
+        let allowed = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: " '’-."))
+        guard written.unicodeScalars.allSatisfy(allowed.contains), written.unicodeScalars.allSatisfy({ $0.value < 0x2000 }) else { return }
+        // Two dictations glued together ("Codex" + "Third" → "CodexThird") look like a fix but aren't.
+        let h = heard.lowercased().filter(\.isLetter), w = written.lowercased().filter(\.isLetter)
+        if !w.contains(" "), w.count >= h.count + 3, w.hasPrefix(h) || w.hasSuffix(h) { return }
+        // Short words need a close match: "Yes" is not a mishearing of "ttys005".
+        if h.count <= 4, WordDiff.soundSimilarity(h, w) < 0.75 { return }
         // "So" → "so" is a style habit, not a mishearing; only names deserve a case fix.
         if heard.lowercased() == written.lowercased(),
            written.split(separator: " ").allSatisfy({ TermExtractor.isEnglishWord(TermExtractor.clean(String($0))) }) {

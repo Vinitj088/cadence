@@ -21,6 +21,9 @@ enum TermExtractor {
     static func isDistinctive(_ word: String, atSentenceStart: Bool = false) -> Bool {
         guard (3...32).contains(word.count), word.contains(where: \.isLetter) else { return false }
         guard !word.contains("@"), !word.contains("/"), !word.hasPrefix("http") else { return false }
+        // Only plausible name characters: "formatLists\\|became" is a regex, not a word.
+        let allowed = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: ".-_+#'’"))
+        guard word.unicodeScalars.allSatisfy(allowed.contains) else { return false }
         // Letters and digits together: M4Pro, GPT5, B2B.
         if word.contains(where: \.isNumber) { return word.filter(\.isLetter).count >= 2 }
         let letters = Array(word)

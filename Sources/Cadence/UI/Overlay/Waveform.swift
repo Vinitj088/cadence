@@ -132,11 +132,12 @@ struct RacingWave: View {
 
     var color: Color = .white
     var barCount = 26
+    var paused = false
 
     @ViewState private var startedAt = Date.timeIntervalSinceReferenceDate
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(paused: paused)) { timeline in
             Canvas { context, size in
                 draw(in: &context, size: size, t: timeline.date.timeIntervalSinceReferenceDate - startedAt)
             }

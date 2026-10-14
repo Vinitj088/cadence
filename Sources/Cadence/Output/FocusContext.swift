@@ -20,6 +20,8 @@ struct FocusContext {
     var windowTitle: String?
     /// Claude Code's input box is open in this terminal (multi-line input is safe).
     var isClaudeCodeInput = false
+    /// What's already typed in Claude Code's input box, read off the screen.
+    var terminalInput: String?
     /// Text currently selected in the focused field, if any.
     var selectedText: String?
 
@@ -70,6 +72,7 @@ struct FocusContext {
                 // between horizontal rules, with hints like "shift+tab to cycle" underneath.
                 let markers = ["│ >", "│ ❯", "\n❯", "? for shortcuts", "shift+tab to cycle", "esc to interrupt", "for agents", "bypass permissions", "accept edits"]
                 context.isClaudeCodeInput = markers.contains { tail.contains($0) }
+                if context.isClaudeCodeInput { context.terminalInput = Self.claudeCodeInput(String(tail)) }
             }
             logger.notice("focus: terminal \(context.bundleID ?? "?", privacy: .public) readable=\(buffer != nil, privacy: .public) chars=\(buffer?.count ?? 0, privacy: .public) claudeCode=\(context.isClaudeCodeInput, privacy: .public)")
             return context
@@ -102,6 +105,30 @@ struct FocusContext {
         exposedPIDs.insert(app.processIdentifier)
         let element = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
+
+    /// The text in Claude Code's input box: from the last "❯" / "│ >" prompt line down to the
+    /// rule beneath it, with box borders stripped.
+    static func claudeCodeInput(_ screen: String) -> String? {
+        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.lastIndex(where: { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("❯") || t.hasPrefix("│ >") || t.hasPrefix("│ ❯") || t.hasPrefix("> ")
+        }) else { return nil }
+        var parts: [String] = []
+        for (offset, line) in lines[start...].enumerated() {
+            var t = line.trimmingCharacters(in: .whitespaces)
+            // The box (or rule) under the input ends it.
+            if offset > 0, t.hasPrefix("─") || t.hasPrefix("╰") || t.isEmpty { break }
+            for marker in ["│ ❯", "│ >", "❯", "> ", "│"] where t.hasPrefix(marker) {
+                t = String(t.dropFirst(marker.count))
+                break
+            }
+            if t.hasSuffix("│") { t.removeLast() }
+            parts.append(t.trimmingCharacters(in: .whitespaces))
+        }
+        let text = parts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : text
     }
 
     /// Lines the user typed in a terminal: Claude Code reprints submitted prompts as "> …",

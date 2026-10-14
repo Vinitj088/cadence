@@ -109,9 +109,12 @@ private struct HowToCard: View {
 }
 
 /// A self-running preview of the overlay: listening → racing → done.
+/// Pauses while the main window is off screen, which is most of the app's life.
 private struct DemoPill: View {
+    @Environment(\.isWindowVisible) private var visible
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+        TimelineView(.animation(minimumInterval: 0.1, paused: !visible)) { context in
             let cycle = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5.4)
             let stage = cycle < 3 ? 0 : cycle < 4.5 ? 1 : 2
 
@@ -122,8 +125,8 @@ private struct DemoPill: View {
                     Spacer()
                     Group {
                         switch stage {
-                        case 0: LiveWaveform(meter: LevelMeter(), simulate: true).frame(width: 112, height: 22)
-                        case 1: RacingWave().frame(width: 112, height: 22)
+                        case 0: LiveWaveform(meter: LevelMeter(), paused: !visible, simulate: true).frame(width: 112, height: 22)
+                        case 1: RacingWave(paused: !visible).frame(width: 112, height: 22)
                         default:
                             Image(systemName: "checkmark")
                                 .font(.system(size: 13, weight: .bold))

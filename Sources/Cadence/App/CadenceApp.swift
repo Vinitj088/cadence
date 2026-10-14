@@ -33,6 +33,7 @@ struct CadenceApp: App {
                 .environment(env.voiceFit)
                 .environment(env.dictation)
                 .frame(minWidth: 820, minHeight: 560)
+                .tracksWindowVisibility()
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)

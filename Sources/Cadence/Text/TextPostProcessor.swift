@@ -7,6 +7,8 @@ struct TextPostProcessor {
     var smartFormatting = true
     var vocabulary: [String] = []
     var replacements: [Replacement] = []
+    /// Words visible on screen for this take: used for spacing and casing only.
+    var sessionVocabulary: [String] = []
 
     func process(_ raw: String) -> String {
         var text = raw.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
@@ -95,9 +97,10 @@ struct TextPostProcessor {
 
     /// Fixes the casing and spacing of known terms: "type script" / "Typescript" → "TypeScript".
     func applyVocabulary(_ text: String) -> String {
-        guard !vocabulary.isEmpty else { return text }
+        let terms = vocabulary + sessionVocabulary
+        guard !terms.isEmpty else { return text }
         var t = text
-        for term in vocabulary where !term.trimmingCharacters(in: .whitespaces).isEmpty {
+        for term in terms where !term.trimmingCharacters(in: .whitespaces).isEmpty {
             let letters = term.filter { $0.isLetter || $0.isNumber }
             guard letters.count >= 2 else { continue }
             // Allow the engine to have split the term with spaces or hyphens anywhere.

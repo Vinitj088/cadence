@@ -145,10 +145,17 @@ enum StyleFormatter {
             let value = ordinals.first { $0.0 == word }?.1 ?? (["finally", "lastly"].contains(word) && expected > 2 ? expected : 0)
             guard value == expected else { continue }
 
-            let before = ns.substring(to: match.range.location).trimmingCharacters(in: .whitespaces).lowercased()
+            // "The first one is…": look past a leading "the".
+            var before = ns.substring(to: match.range.location).trimmingCharacters(in: .whitespaces).lowercased()
+            var markerStart = match.range.location
+            if before.hasSuffix(" the") || before == "the" {
+                before = String(before.dropLast(3)).trimmingCharacters(in: .whitespaces)
+                markerStart = (ns.substring(to: match.range.location) as NSString).range(of: "the", options: [.backwards, .caseInsensitive]).location
+            }
             let clauseStart = before.isEmpty || ".,;:!?".contains(before.last!) || before.hasSuffix(" and") || before.hasSuffix(" then")
             let after = ns.substring(from: NSMaxRange(match.range)).lowercased()
             let introducesItem = after.hasPrefix(",") || after.hasPrefix(":") || after.hasPrefix(" is ") || after.hasPrefix(" would be ")
+                || after.range(of: #"^\s+(?:one|thing|item|point|step)\s+(?:is|would be)\b"#, options: .regularExpression) != nil
             // "First of all" is a figure of speech, not a list.
             if after.hasPrefix(" of all") { continue }
             guard clauseStart || introducesItem else { continue }
@@ -156,10 +163,10 @@ enum StyleFormatter {
             // The item starts after the marker and any "is", "would be" or punctuation.
             var bodyStart = NSMaxRange(match.range)
             let lead = ns.substring(from: bodyStart)
-            if let r = lead.range(of: #"^[,:]?\s*(?:(?:is|would be)(?:\s+that)?\s+)?"#, options: [.regularExpression, .caseInsensitive]) {
+            if let r = lead.range(of: #"^[,:]?\s*(?:(?:one|thing|item|point|step)\s+)?(?:(?:is|would be)(?:\s+that)?\s+)?"#, options: [.regularExpression, .caseInsensitive]) {
                 bodyStart += lead[r].utf16.count
             }
-            markers.append(Marker(range: match.range, bodyStart: bodyStart))
+            markers.append(Marker(range: NSRange(location: markerStart, length: NSMaxRange(match.range) - markerStart), bodyStart: bodyStart))
             expected += 1
         }
         guard markers.count >= 2 else { return text }
@@ -177,7 +184,8 @@ enum StyleFormatter {
             item = item.replacingOccurrences(of: #"(?i)(?:\s*(?:[,;]|\band\b|\bthen\b))*\s*$"#, with: "", options: .regularExpression)
             item = item.trimmingCharacters(in: CharacterSet(charactersIn: ".,; "))
             guard !item.isEmpty else { return text }
-            items.append(TextPostProcessor.capitalizingFirstLetter(item))
+            // "/compact" and "@file" stay as typed; only items that start with a word get a capital.
+            items.append(item.first?.isLetter == true ? TextPostProcessor.capitalizingFirstLetter(item) : item)
         }
         let list = items.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
         return intro.isEmpty ? list : intro + "\n" + list

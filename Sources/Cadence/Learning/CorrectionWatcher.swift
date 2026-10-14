@@ -73,8 +73,8 @@ final class CorrectionWatcher {
         let haystack = FuzzyLocate.words(String(buffer.suffix(12_000)))
         guard let match = FuzzyLocate.bestWindow(of: current.inserted, in: haystack) else { return }
         let n = current.inserted.count
-        // Unchanged, or nothing on screen resembles it any more (cleared, scrolled away).
-        guard match.distance > 0, Double(match.distance) <= max(3, Double(n) * 0.5) else { return }
+        // Unchanged, or nothing on screen resembles it closely enough to be sure it's the same text.
+        guard n >= 3, match.distance > 0, Double(match.distance) <= max(1, Double(n) * 0.34) else { return }
         let found = Array(haystack[match.range])
         reportStyle(from: current.inserted.joined(separator: " "), to: found.joined(separator: " "))
         onEdited?(found.joined(separator: " "))

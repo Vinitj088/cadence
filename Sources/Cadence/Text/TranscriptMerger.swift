@@ -66,13 +66,15 @@ enum TranscriptMerger {
     private static func choosesCompanion(_ p: [String], _ c: [String], vocab: Set<String>) -> Bool {
         guard c.count <= 4, p.count <= 4 else { return false }
         let pKeys = p.map(key), cKeys = c.map(key)
-        // The companion heard one of the user's words that the primary missed.
         let joinedC = cKeys.joined(), joinedP = pKeys.joined()
-        if cKeys.contains(where: vocab.contains) || vocab.contains(joinedC), !pKeys.contains(where: vocab.contains), !vocab.contains(joinedP) {
+        // Keyword boosting makes the companion over-eager ("context" → "Codex"), so it only wins
+        // where the primary's version is garbled, never over real words it heard correctly.
+        let pHasNonWord = p.contains { w in let k = TermExtractor.clean(w); return k.count >= 3 && !TermExtractor.isEnglishWord(k) && !vocab.contains(key(w)) }
+        // The companion heard one of the user's words where the primary produced a non-word.
+        if cKeys.contains(where: vocab.contains) || vocab.contains(joinedC), !pKeys.contains(where: vocab.contains), !vocab.contains(joinedP),
+           pHasNonWord, WordDiff.soundSimilarity(joinedP, joinedC) >= 0.5 {
             return true
         }
-        // The primary produced a non-word where the companion heard real words that sound the same.
-        let pHasNonWord = p.contains { w in let k = TermExtractor.clean(w); return k.count >= 3 && !TermExtractor.isEnglishWord(k) && !vocab.contains(key(w)) }
         let cAllWords = c.allSatisfy { w in let k = TermExtractor.clean(w); return k.isEmpty || TermExtractor.isEnglishWord(k) }
         if pHasNonWord, cAllWords, WordDiff.soundSimilarity(joinedP, joinedC) >= 0.6 { return true }
         return false
